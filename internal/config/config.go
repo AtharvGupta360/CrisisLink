@@ -44,7 +44,21 @@ type Config struct {
 	// DBMaxConnIdleTime closes connections idle this long so a spike doesn't pin
 	// idle connections open forever.
 	DBMaxConnIdleTime time.Duration
+
+	// AppEnv selects runtime behaviour. "production" puts Gin in release mode
+	// (no debug output, faster); anything else is treated as development.
+	AppEnv string
+
+	// HTTP server timeouts — production hardening. Unbounded timeouts are a
+	// classic outage: slow/stuck clients hold connections open, exhausting the
+	// server and (transitively) the DB pool.
+	HTTPReadTimeout  time.Duration // max time to read the full request
+	HTTPWriteTimeout time.Duration // max time to write the response
+	HTTPIdleTimeout  time.Duration // keep-alive idle timeout between requests
 }
+
+// IsProduction reports whether we run in production mode (Gin release mode, etc.).
+func (c Config) IsProduction() bool { return c.AppEnv == "production" }
 
 // Load reads the environment and returns a validated Config, or an error the
 // caller (main) turns into a boot-time crash.
@@ -61,6 +75,10 @@ func Load() (Config, error) {
 		DBMaxConns:        int32(envIntOr("DB_MAX_CONNS", 10)),
 		DBMaxConnLifetime: 60 * time.Minute,
 		DBMaxConnIdleTime: 5 * time.Minute,
+		AppEnv:            envOr("APP_ENV", "development"),
+		HTTPReadTimeout:   10 * time.Second,
+		HTTPWriteTimeout:  15 * time.Second,
+		HTTPIdleTimeout:   60 * time.Second,
 	}
 
 	// Optional override; if set but garbage, crash now rather than ignore intent.
