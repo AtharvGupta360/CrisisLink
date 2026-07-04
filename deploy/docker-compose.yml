@@ -27,7 +27,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crisislink_dev_pw}
       POSTGRES_DB: ${POSTGRES_DB:-crisislink}
     ports:
-      - "5432:5432"
+      # Host 5433 (not 5432) to avoid colliding with a native PostgreSQL install
+      # that already owns 5432 on this machine. Container-internal port stays 5432.
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data   # named volume => data survives `down`
     healthcheck:
