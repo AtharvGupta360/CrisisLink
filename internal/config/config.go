@@ -1,124 +1,131 @@
-// Package config loads all runtime settings from environment variables into a
-// single typed struct at startup. Two deliberate rules live here:
-//
-//  1. Config comes from the ENVIRONMENT, never a file checked into git. The same
-//     binary must run unchanged in dev / CI / prod, and secrets (DB password,
-//     JWT key) must never touch the repo.
-//
-//  2. We FAIL FAST. A missing/invalid required setting kills the process at boot,
-//     loudly — not as a nil-pointer panic on the first request during an actual
-//     disaster. "Crash at startup" is a feature.
+// Package config loads all runtime settings using viper. Precedence (lowest to
+// highest): SetDefault values < config.yaml < environment variables. Nested YAML
+// keys map onto nested structs via `mapstructure` tags. Secrets live in
+// config.yaml (gitignored) or env, never in config.yaml.example (committed).
 package config
 
 import (
 	"fmt"
-	"os"
-	"strconv"
-	"time"
+	"strings"
+
+	"github.com/spf13/viper"
 )
 
-// Config is the whole application's settings, resolved once at boot and then
-// treated as read-only.
+// Config is the whole application's settings, resolved once at boot.
 type Config struct {
-	// HTTPAddr is the host:port the API server binds to, e.g. ":8080".
-	HTTPAddr string
-
-	// ShutdownTimeout bounds how long we wait for in-flight requests to drain on
-	// SIGTERM before forcing exit. See cmd/crisislink/main.go.
-	ShutdownTimeout time.Duration
-
-	// DatabaseURL is the Postgres DSN, e.g.
-	//   postgres://user:pass@localhost:5432/crisislink?sslmode=disable
-	// REQUIRED — the process refuses to start without it (fail-fast).
-	DatabaseURL string
-
-	// DBMaxConns is the pool ceiling. Budget = Postgres max_connections / app
-	// instances, with headroom. Too low: requests queue for a free conn. Too
-	// high: we exhaust Postgres's process limit and it rejects connections.
-	DBMaxConns int32
-
-	// DBMaxConnLifetime retires a connection after this long even if healthy —
-	// lets load rebalance after a failover and dodges server-side memory creep.
-	DBMaxConnLifetime time.Duration
-
-	// DBMaxConnIdleTime closes connections idle this long so a spike doesn't pin
-	// idle connections open forever.
-	DBMaxConnIdleTime time.Duration
-
-	// AppEnv selects runtime behaviour. "production" puts Gin in release mode
-	// (no debug output, faster); anything else is treated as development.
-	AppEnv string
-
-	// HTTP server timeouts — production hardening. Unbounded timeouts are a
-	// classic outage: slow/stuck clients hold connections open, exhausting the
-	// server and (transitively) the DB pool.
-	HTTPReadTimeout  time.Duration // max time to read the full request
-	HTTPWriteTimeout time.Duration // max time to write the response
-	HTTPIdleTimeout  time.Duration // keep-alive idle timeout between requests
+	Server   ServerConfig   `mapstructure:"server"`
+	Database DatabaseConfig `mapstructure:"database"`
+	JWT      JWTConfig      `mapstructure:"jwt"`
+	Redis    RedisConfig    `mapstructure:"redis"`
+	CORS     CORSConfig     `mapstructure:"cors"`
 }
 
-// IsProduction reports whether we run in production mode (Gin release mode, etc.).
-func (c Config) IsProduction() bool { return c.AppEnv == "production" }
+type ServerConfig struct {
+	Port            int    `mapstructure:"port"`
+	Mode            string `mapstructure:"mode"`             // gin mode: "debug" | "release" | "test"
+	ReadTimeout     int    `mapstructure:"read_timeout"`     // seconds
+	WriteTimeout    int    `mapstructure:"write_timeout"`    // seconds
+	IdleTimeout     int    `mapstructure:"idle_timeout"`     // seconds
+	ShutdownTimeout int    `mapstructure:"shutdown_timeout"` // seconds to drain on SIGTERM
+}
 
-// Load reads the environment and returns a validated Config, or an error the
-// caller (main) turns into a boot-time crash.
-func Load() (Config, error) {
-	dbURL, err := requireEnv("DATABASE_URL")
-	if err != nil {
-		return Config{}, err
-	}
+type DatabaseConfig struct {
+	Host                   string `mapstructure:"host"`
+	Port                   int    `mapstructure:"port"`
+	User                   string `mapstructure:"user"`
+	Password               string `mapstructure:"password"`
+	DBName                 string `mapstructure:"dbname"`
+	SSLMode                string `mapstructure:"sslmode"`
+	MaxConns               int32  `mapstructure:"maxConns"`               // pool ceiling
+	MaxConnLifetimeMinutes int    `mapstructure:"maxConnLifetimeMinutes"` // retire conns after
+	MaxConnIdleMinutes     int    `mapstructure:"maxConnIdleMinutes"`     // close idle conns after
+}
 
-	cfg := Config{
-		HTTPAddr:          envOr("HTTP_ADDR", ":8080"),
-		ShutdownTimeout:   15 * time.Second,
-		DatabaseURL:       dbURL,
-		DBMaxConns:        int32(envIntOr("DB_MAX_CONNS", 10)),
-		DBMaxConnLifetime: 60 * time.Minute,
-		DBMaxConnIdleTime: 5 * time.Minute,
-		AppEnv:            envOr("APP_ENV", "development"),
-		HTTPReadTimeout:   10 * time.Second,
-		HTTPWriteTimeout:  15 * time.Second,
-		HTTPIdleTimeout:   60 * time.Second,
-	}
+// DSN builds the pgx connection URL. 127.0.0.1 (not localhost) avoids IPv6/::1
+// ambiguity; see docs/LEARNING.md P3 gotchas.
+func (c *DatabaseConfig) DSN() string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		c.User, c.Password, c.Host, c.Port, c.DBName, c.SSLMode)
+}
 
-	// Optional override; if set but garbage, crash now rather than ignore intent.
-	if raw, ok := os.LookupEnv("SHUTDOWN_TIMEOUT"); ok {
-		d, err := time.ParseDuration(raw)
-		if err != nil {
-			return Config{}, fmt.Errorf("SHUTDOWN_TIMEOUT %q is not a valid duration (want e.g. \"15s\"): %w", raw, err)
+type JWTConfig struct {
+	SecretKey   string `mapstructure:"secretkey"`
+	ExpiryHours int    `mapstructure:"expiryHours"`
+}
+
+type RedisConfig struct {
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	Password string `mapstructure:"password"`
+	DB       int    `mapstructure:"db"`
+}
+
+type CORSConfig struct {
+	AllowedOrigins   []string `mapstructure:"allowedOrigins"`
+	AllowedMethods   []string `mapstructure:"allowedMethods"`
+	AllowedHeaders   []string `mapstructure:"allowedHeaders"`
+	ExposedHeaders   []string `mapstructure:"exposedHeaders"`
+	AllowCredentials bool     `mapstructure:"allowCredentials"`
+	MaxAge           int      `mapstructure:"maxAge"`
+}
+
+// LoadConfig reads config.yaml from `path` (if present), overlays env vars, and
+// unmarshals into Config. A missing config file is fine — defaults + env cover it.
+func LoadConfig(path string) (*Config, error) {
+	viper.SetConfigName("config")
+	viper.SetConfigType("yaml")
+	viper.AddConfigPath(path)
+
+	// --- defaults (lowest precedence) ---
+	viper.SetDefault("server.port", 8080)
+	viper.SetDefault("server.mode", "debug")
+	viper.SetDefault("server.read_timeout", 15)
+	viper.SetDefault("server.write_timeout", 15)
+	viper.SetDefault("server.idle_timeout", 60)
+	viper.SetDefault("server.shutdown_timeout", 30)
+
+	viper.SetDefault("database.host", "127.0.0.1")
+	viper.SetDefault("database.port", 5433) // container maps 5433->5432 (native PG owns 5432)
+	viper.SetDefault("database.user", "crisislink")
+	viper.SetDefault("database.password", "crisislink_dev_pw")
+	viper.SetDefault("database.dbname", "crisislink")
+	viper.SetDefault("database.sslmode", "disable")
+	viper.SetDefault("database.maxConns", 10)
+	viper.SetDefault("database.maxConnLifetimeMinutes", 60)
+	viper.SetDefault("database.maxConnIdleMinutes", 5)
+
+	viper.SetDefault("jwt.secretkey", "dev-secret-change-in-prod")
+	viper.SetDefault("jwt.expiryHours", 24)
+
+	viper.SetDefault("redis.host", "127.0.0.1")
+	viper.SetDefault("redis.port", 6379)
+	viper.SetDefault("redis.password", "")
+	viper.SetDefault("redis.db", 0)
+
+	viper.SetDefault("cors.allowedOrigins", []string{"http://localhost:3000", "http://localhost:5173"})
+	viper.SetDefault("cors.allowedMethods", []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"})
+	viper.SetDefault("cors.allowedHeaders", []string{"Content-Type", "Authorization", "X-Request-ID"})
+	viper.SetDefault("cors.exposedHeaders", []string{"X-Request-ID"})
+	viper.SetDefault("cors.allowCredentials", true)
+	viper.SetDefault("cors.maxAge", 86400)
+
+	// --- config file (middle precedence) ---
+	if err := viper.ReadInConfig(); err != nil {
+		// Not-found is acceptable; any other read error is fatal.
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return nil, fmt.Errorf("read config: %w", err)
 		}
-		cfg.ShutdownTimeout = d
 	}
 
-	return cfg, nil
-}
+	// --- env vars (highest precedence) ---
+	// Replacer lets SERVER_PORT override server.port, DATABASE_PASSWORD override
+	// database.password, etc. (dots aren't legal in env var names).
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	viper.AutomaticEnv()
 
-// requireEnv returns the value or an error if the var is unset/empty. This is
-// the fail-fast primitive: a genuinely required setting must never silently
-// default.
-func requireEnv(key string) (string, error) {
-	v, ok := os.LookupEnv(key)
-	if !ok || v == "" {
-		return "", fmt.Errorf("required environment variable %s is not set", key)
+	var cfg Config
+	if err := viper.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
-	return v, nil
-}
-
-// envOr returns the env var's value, or fallback if unset or empty. Treating ""
-// as unset avoids an exported-but-empty variable silently overriding a default.
-func envOr(key, fallback string) string {
-	if v, ok := os.LookupEnv(key); ok && v != "" {
-		return v
-	}
-	return fallback
-}
-
-// envIntOr returns the env var parsed as int, or fallback if unset/empty/invalid.
-func envIntOr(key string, fallback int) int {
-	if v, ok := os.LookupEnv(key); ok && v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return fallback
+	return &cfg, nil
 }

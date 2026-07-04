@@ -1,0 +1,38 @@
+# Copy to config.yaml (gitignored) and fill real values. Env vars override these:
+# e.g. DATABASE_PASSWORD, JWT_SECRETKEY, SERVER_PORT.
+server:
+  port: 8080
+  mode: debug            # "release" in production
+  read_timeout: 15
+  write_timeout: 15
+  idle_timeout: 60
+  shutdown_timeout: 30
+
+database:
+  host: 127.0.0.1
+  port: 5433             # compose maps host 5433 -> container 5432
+  user: crisislink
+  password: your-db-password
+  dbname: crisislink
+  sslmode: disable
+  maxConns: 10
+  maxConnLifetimeMinutes: 60
+  maxConnIdleMinutes: 5
+
+jwt:
+  secretkey: change-me-in-production
+  expiryHours: 24
+
+redis:
+  host: 127.0.0.1
+  port: 6379
+  password: ""
+  db: 0
+
+cors:
+  allowedOrigins: ["http://localhost:3000", "http://localhost:5173"]
+  allowedMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+  allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"]
+  exposedHeaders: ["X-Request-ID"]
+  allowCredentials: true
+  maxAge: 86400

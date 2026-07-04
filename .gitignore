@@ -5,10 +5,10 @@ crisislink.exe
 *.exe
 *.out
 
-# Env & secrets — config comes from the environment, never the repo
+# Secrets & local config — never committed (config.yaml.example is the template)
+config.yaml
 .env
 .env.*
-!.env.example
 
 # Go
 *.test
