@@ -15,6 +15,9 @@ crisislink.exe
 *.prof
 vendor/
 
+# Learning / design docs — kept local, pushed only when the project is complete
+*.md
+
 # Editor / OS
 .idea/
 .vscode/
