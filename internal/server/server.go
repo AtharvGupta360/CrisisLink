@@ -16,9 +16,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AtharvGupta360/CrisisLink/internal/auth"
 	"github.com/AtharvGupta360/CrisisLink/internal/common"
 	"github.com/AtharvGupta360/CrisisLink/internal/config"
+	"github.com/AtharvGupta360/CrisisLink/internal/handlers"
 	"github.com/AtharvGupta360/CrisisLink/internal/middleware"
+	"github.com/AtharvGupta360/CrisisLink/internal/repository"
 )
 
 // NewServer builds the Gin engine: base middleware chain, health/ready probes,
@@ -51,7 +54,19 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 		common.Success(c, http.StatusOK, "server is ready", gin.H{"status": "ready"})
 	})
 
-	// api := r.Group("/api/v1")  // domain routes wired here from P4 onward.
+	// --- dependency injection: repository -> service -> handler ---
+	// This is the composition root for the HTTP layer. Each domain's stack is
+	// wired here and mounted under /api/v1.
+	userRepo := repository.NewUserRepository(pool)
+	authService := auth.NewService(userRepo, &cfg.JWT)
+	authHandler := handlers.NewAuthHandler(authService)
+
+	api := r.Group("/api/v1")
+	{
+		// Public auth routes (no token required).
+		api.POST("/auth/register", authHandler.Register)
+		api.POST("/auth/login", authHandler.Login)
+	}
 
 	return r
 }
