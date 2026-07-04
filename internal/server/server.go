@@ -68,6 +68,21 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 		api.POST("/auth/login", authHandler.Login)
 	}
 
+	// Protected routes — AuthRequired verifies the Bearer token and puts the
+	// caller's identity on the context. Everything in this group needs a token.
+	protected := api.Group("")
+	protected.Use(middleware.AuthRequired(&cfg.JWT))
+	{
+		// /me echoes the identity carried by the token — proof the JWT round-trips.
+		protected.GET("/me", func(c *gin.Context) {
+			common.Success(c, http.StatusOK, "authenticated user", gin.H{
+				"userID":   c.GetString("userID"),
+				"username": c.GetString("username"),
+				"role":     c.GetString("role"),
+			})
+		})
+	}
+
 	return r
 }
 
