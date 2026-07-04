@@ -30,11 +30,21 @@ import (
 func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 	gin.SetMode(cfg.Server.Mode)
 
-	// gin.New() (bare) not gin.Default() — we own the chain explicitly.
-	// Order: request-id first (so recovery/logging can reference it), then
-	// recovery (catch panics in logging or handlers), then logging.
+	// gin.New() (bare) not gin.Default() — we own the chain explicitly. Order
+	// matters: CORS first (answer/reject cross-origin before doing any work),
+	// request-id next (so everything downstream can log it), rate-limit (cheaply
+	// shed abusive traffic early), recovery (catch panics), logging last.
 	r := gin.New()
-	r.Use(middleware.RequestID(), middleware.Recovery(), middleware.RequestLogger())
+	r.Use(
+		middleware.CORS(&cfg.CORS),
+		middleware.RequestID(),
+		middleware.RateLimiter(middleware.RateLimiterConfig{
+			RequestsPerSecond: 10, // sustained per-IP rate
+			BurstSize:         20, // tolerate short spikes
+		}),
+		middleware.Recovery(),
+		middleware.RequestLogger(),
+	)
 
 	// Liveness: is the process up? No dependencies checked.
 	r.GET("/health", func(c *gin.Context) {
