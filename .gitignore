@@ -18,6 +18,9 @@ vendor/
 # Learning / design docs — kept local, pushed only when the project is complete
 *.md
 
+# Claude Code local (personal) settings — never published
+.claude/settings.local.json
+
 # Editor / OS
 .idea/
 .vscode/
