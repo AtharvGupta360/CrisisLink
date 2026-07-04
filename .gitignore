@@ -1,0 +1,23 @@
+# Compiled binaries
+/bin/
+crisislink
+crisislink.exe
+*.exe
+*.out
+
+# Env & secrets — config comes from the environment, never the repo
+.env
+.env.*
+!.env.example
+
+# Go
+*.test
+*.prof
+vendor/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
