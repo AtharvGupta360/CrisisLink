@@ -81,6 +81,18 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 				"role":     c.GetString("role"),
 			})
 		})
+
+		// Admin-only routes: AdminRequired runs AFTER AuthRequired and checks the
+		// role it set. Real admin routes (rescue-unit CRUD, etc.) attach here later.
+		admin := protected.Group("/admin")
+		admin.Use(middleware.AdminRequired())
+		{
+			admin.GET("/ping", func(c *gin.Context) {
+				common.Success(c, http.StatusOK, "admin access granted", gin.H{
+					"role": c.GetString("role"),
+				})
+			})
+		}
 	}
 
 	return r
