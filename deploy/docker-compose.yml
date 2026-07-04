@@ -1,0 +1,129 @@
+# CrisisLink local backing stack. One command brings up every external system
+# the app depends on, identical for anyone who clones the repo:
+#
+#   docker compose -f deploy/docker-compose.yml up -d
+#   docker compose -f deploy/docker-compose.yml down          # keeps volumes
+#   docker compose -f deploy/docker-compose.yml down -v        # wipes data too
+#
+# This is the DEV-TIME orchestrator. Production orchestration is Kubernetes (P30).
+# In dev the Go app runs on the HOST (`go run ./cmd/crisislink`) and reaches these
+# services on localhost via the published ports below. When we containerize the
+# app later, it will instead reach them by service name on the compose network.
+
+name: crisislink
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL + PostGIS — the durable source of truth. Owns every table. PostGIS
+  # gives us geometry types and GiST spatial indexes (KNN / radius) in the SAME
+  # database (and therefore the same transaction) as our reservation & outbox
+  # logic. That co-location is the whole reason no-double-booking (P13) stays a
+  # single BEGIN..COMMIT.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgis/postgis:16-3.4          # Postgres 16 with the PostGIS extension prebuilt
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-crisislink}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crisislink_dev_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-crisislink}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # named volume => data survives `down`
+    healthcheck:
+      # pg_isready returns success only once Postgres can actually accept
+      # connections — "container started" != "database ready".
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crisislink} -d ${POSTGRES_DB:-crisislink}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Redis — fast, ephemeral state: responder presence (TTL keys, P23) and live
+  # GEO positions (P24). Deliberately NOT durable-critical; if it restarts, the
+  # durable truth in Postgres is untouched.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]  # dev: no persistence, it's a cache
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]     # expects "PONG"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Kafka — the event backbone for the transactional outbox (P19-22). Single-node
+  # KRaft mode: Kafka manages its own metadata quorum via built-in Raft, so there
+  # is NO separate Zookeeper container. This one node is both broker and
+  # controller (`process.roles=broker,controller`).
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: apache/kafka:3.9.0
+    ports:
+      - "9092:9092"                          # host clients (our dev app) connect here
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # Two listeners: PLAINTEXT for normal traffic, CONTROLLER for the Raft quorum.
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      # What clients are TOLD to connect to. localhost works for host-side clients
+      # because we publish 9092. (Revisited when the app itself is containerized.)
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      # Single node => everything replicated exactly once. In prod these are >=3.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0   # dev: form consumer groups instantly
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      # The broker is ready only when it can answer an admin API call.
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+
+  # ---------------------------------------------------------------------------
+  # Prometheus — pull-based metrics. Scrapes /metrics off our app (P25). Config in
+  # deploy/prometheus.yml.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Grafana — dashboards over Prometheus (P26). Just brought up reachable here;
+  # datasource + dashboards are wired in P26.
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.2.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
+  kafka_data:
+  prometheus_data:
+  grafana_data:
