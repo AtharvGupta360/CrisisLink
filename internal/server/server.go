@@ -100,6 +100,7 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 		// Incident routes — any authenticated user may report and read incidents.
 		protected.POST("/incidents", incidentHandler.Create)
 		protected.GET("/incidents", incidentHandler.List)
+		protected.GET("/incidents/nearby", incidentHandler.Nearby) // static route before :id
 		protected.GET("/incidents/:id", incidentHandler.GetByID)
 		protected.PATCH("/incidents/:id/status", incidentHandler.UpdateStatus)
 

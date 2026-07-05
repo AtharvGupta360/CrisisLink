@@ -83,6 +83,34 @@ func (h *IncidentHandler) List(c *gin.Context) {
 	common.Success(c, http.StatusOK, "incidents", incidents)
 }
 
+// Nearby handles GET /incidents/nearby?lat=&lng=&radius= — the radius search.
+// lat/lng are required; radius defaults to 5000m.
+func (h *IncidentHandler) Nearby(c *gin.Context) {
+	lat, errLat := strconv.ParseFloat(c.Query("lat"), 64)
+	lng, errLng := strconv.ParseFloat(c.Query("lng"), 64)
+	if errLat != nil || errLng != nil {
+		common.Error(c, http.StatusBadRequest, "lat and lng query params are required", "VALIDATION_ERROR")
+		return
+	}
+	radius := 5000.0
+	if raw := c.Query("radius"); raw != "" {
+		if r, err := strconv.ParseFloat(raw, 64); err == nil {
+			radius = r
+		}
+	}
+
+	incidents, err := h.svc.Nearby(c.Request.Context(), lat, lng, radius, 100)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidCoordinates) || errors.Is(err, service.ErrInvalidRadius) {
+			common.Error(c, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+			return
+		}
+		common.Error(c, http.StatusInternalServerError, "could not search incidents", "INTERNAL_ERROR")
+		return
+	}
+	common.Success(c, http.StatusOK, "nearby incidents", incidents)
+}
+
 type UpdateStatusRequest struct {
 	Status string `json:"status" binding:"required,oneof=reported verified dispatched resolved cancelled"`
 }

@@ -21,6 +21,7 @@ var (
 	ErrInvalidStatus      = errors.New("invalid status")
 	ErrIllegalTransition  = errors.New("illegal status transition")
 	ErrIncidentNotFound   = errors.New("incident not found")
+	ErrInvalidRadius      = errors.New("radius must be between 1 and 100000 meters")
 )
 
 var validSeverities = map[string]bool{
@@ -108,6 +109,21 @@ func (s *IncidentService) GetByID(ctx context.Context, id string) (*models.Incid
 
 func (s *IncidentService) List(ctx context.Context, limit, offset int) ([]models.Incident, error) {
 	return s.repo.List(ctx, limit, offset)
+}
+
+// Nearby returns incidents within radiusMeters of (lat,lng), nearest first. This
+// is the radius search backed by the GiST spatial index (P8).
+func (s *IncidentService) Nearby(ctx context.Context, lat, lng, radiusMeters float64, limit int) ([]models.Incident, error) {
+	if lat < -90 || lat > 90 || lng < -180 || lng > 180 {
+		return nil, ErrInvalidCoordinates
+	}
+	if radiusMeters <= 0 || radiusMeters > 100000 {
+		return nil, ErrInvalidRadius
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	return s.repo.FindWithinRadius(ctx, lat, lng, radiusMeters, limit)
 }
 
 // UpdateStatus enforces the state machine: it loads the current status and

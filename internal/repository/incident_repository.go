@@ -93,3 +93,39 @@ func (r *IncidentRepository) UpdateStatus(ctx context.Context, id, status string
 	}
 	return &inc, nil
 }
+
+// FindWithinRadius returns incidents within radiusMeters of (lat,lng), nearest
+// first, each with DistanceMeters populated.
+//
+// The WHERE uses ST_DWithin(location::geography, point::geography, meters) — this
+// is what the GiST index on (location::geography) accelerates. ST_Distance in the
+// SELECT gives the exact metric distance for display/sorting. Params: $1=lng,
+// $2=lat (ST_MakePoint is X,Y = lng,lat), $3=radius(m), $4=limit.
+func (r *IncidentRepository) FindWithinRadius(ctx context.Context, lat, lng, radiusMeters float64, limit int) ([]models.Incident, error) {
+	const q = `
+		SELECT ` + incidentColumns + `,
+		       ST_Distance(location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS distance_m
+		FROM incidents
+		WHERE ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
+		ORDER BY distance_m
+		LIMIT $4`
+	rows, err := r.pool.Query(ctx, q, lng, lat, radiusMeters, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]models.Incident, 0)
+	for rows.Next() {
+		var inc models.Incident
+		if err := rows.Scan(
+			&inc.ID, &inc.ReporterID, &inc.Title, &inc.Description,
+			&inc.Severity, &inc.Status, &inc.Longitude, &inc.Latitude,
+			&inc.CreatedAt, &inc.UpdatedAt, &inc.DistanceMeters,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, inc)
+	}
+	return out, rows.Err()
+}
