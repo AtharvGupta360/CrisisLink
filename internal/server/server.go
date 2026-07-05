@@ -76,6 +76,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 	incidentService := service.NewIncidentService(incidentRepo)
 	incidentHandler := handlers.NewIncidentHandler(incidentService)
 
+	unitRepo := repository.NewUnitRepository(pool)
+	unitService := service.NewUnitService(unitRepo)
+	unitHandler := handlers.NewUnitHandler(unitService)
+
 	api := r.Group("/api/v1")
 	{
 		// Public auth routes (no token required).
@@ -103,6 +107,13 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 		protected.GET("/incidents/nearby", incidentHandler.Nearby) // static route before :id
 		protected.GET("/incidents/:id", incidentHandler.GetByID)
 		protected.PATCH("/incidents/:id/status", incidentHandler.UpdateStatus)
+
+		// Rescue units — reads for any authenticated user, writes admin-only
+		// (per-route AdminRequired runs after the group's AuthRequired).
+		protected.GET("/units", unitHandler.List)
+		protected.GET("/units/:id", unitHandler.GetByID)
+		protected.POST("/units", middleware.AdminRequired(), unitHandler.Create)
+		protected.PATCH("/units/:id/status", middleware.AdminRequired(), unitHandler.UpdateStatus)
 
 		// Admin-only routes: AdminRequired runs AFTER AuthRequired and checks the
 		// role it set. Real admin routes (rescue-unit CRUD, etc.) attach here later.
