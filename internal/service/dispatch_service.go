@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"errors"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/models"
 	"github.com/AtharvGupta360/CrisisLink/internal/repository"
+	"github.com/AtharvGupta360/CrisisLink/internal/scoring"
 )
 
 // DispatchService coordinates incidents and units. It grows across the dispatch
@@ -22,9 +24,15 @@ func NewDispatchService(incidents *repository.IncidentRepository, units *reposit
 	return &DispatchService{incidents: incidents, units: units}
 }
 
-// Candidates returns the incident and the nearest available units to it (KNN).
-// P12 will score/rank these candidates; P13 will reserve the chosen one.
-func (s *DispatchService) Candidates(ctx context.Context, incidentID string, limit int) (*models.Incident, []models.Unit, error) {
+// Candidates returns the incident and its dispatch candidates: the nearest
+// available units (KNN shortlist), each scored and sorted best-first. preferredType
+// ("" = no preference) lets a slightly-farther unit of the ideal kind outrank a
+// closer wrong-type unit. P13 will reserve the top-scored candidate.
+//
+// Two-stage design on purpose: the DB does the cheap geometric shortlisting (KNN
+// picks the k nearest via the spatial index), then the pure scoring function ranks
+// that small set in Go. We never score the whole fleet — only the shortlist.
+func (s *DispatchService) Candidates(ctx context.Context, incidentID, preferredType string, limit int) (*models.Incident, []scoring.ScoredUnit, error) {
 	inc, err := s.incidents.GetByID(ctx, incidentID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -36,9 +44,20 @@ func (s *DispatchService) Candidates(ctx context.Context, incidentID string, lim
 	if limit <= 0 || limit > 50 {
 		limit = 5
 	}
+	// KNN shortlist stays type-agnostic: we still want the nearest AVAILABLE units
+	// regardless of type, then let scoring decide how much the type gap costs.
 	units, err := s.units.FindNearestAvailable(ctx, inc.Latitude, inc.Longitude, "", limit)
 	if err != nil {
 		return nil, nil, err
 	}
-	return inc, units, nil
+
+	scored := make([]scoring.ScoredUnit, 0, len(units))
+	for i := range units {
+		score, bd := scoring.Score(&units[i], preferredType)
+		scored = append(scored, scoring.ScoredUnit{Unit: units[i], Score: score, Breakdown: bd})
+	}
+	// Stable sort by score descending: ties keep KNN (nearest-first) order.
+	sort.SliceStable(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
+
+	return inc, scored, nil
 }
