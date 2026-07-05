@@ -32,4 +32,8 @@ type Unit struct {
 	Longitude float64   `json:"longitude"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+
+	// DistanceMeters is populated only by the KNN candidate search (P11); omitted
+	// from JSON on other reads (stays 0).
+	DistanceMeters float64 `json:"distanceMeters,omitempty"`
 }

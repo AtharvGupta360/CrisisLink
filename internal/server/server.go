@@ -80,6 +80,9 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 	unitService := service.NewUnitService(unitRepo)
 	unitHandler := handlers.NewUnitHandler(unitService)
 
+	dispatchService := service.NewDispatchService(incidentRepo, unitRepo)
+	dispatchHandler := handlers.NewDispatchHandler(dispatchService)
+
 	api := r.Group("/api/v1")
 	{
 		// Public auth routes (no token required).
@@ -106,6 +109,7 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 		protected.GET("/incidents", incidentHandler.List)
 		protected.GET("/incidents/nearby", incidentHandler.Nearby) // static route before :id
 		protected.GET("/incidents/:id", incidentHandler.GetByID)
+		protected.GET("/incidents/:id/candidates", dispatchHandler.Candidates) // nearest available units (KNN)
 		protected.PATCH("/incidents/:id/status", incidentHandler.UpdateStatus)
 
 		// Rescue units — reads for any authenticated user, writes admin-only

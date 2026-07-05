@@ -86,3 +86,40 @@ func (r *UnitRepository) UpdateStatus(ctx context.Context, id, status string) (*
 	}
 	return &u, nil
 }
+
+// FindNearestAvailable returns the nearest AVAILABLE units to (lat,lng), nearest
+// first, each with DistanceMeters. Optionally filters by unitType ("" = any).
+//
+// This is the KNN candidate query (P11). The `<->` KNN operator lets the GiST
+// index (the partial idx_units_available_gix) return rows already in nearest-first
+// order and stop at LIMIT — an index scan, O(k log n) — instead of computing
+// ST_Distance for every row and sorting. ST_Distance in the SELECT is only for
+// the display distance, not the ordering. Params: $1=lng, $2=lat, $3=type, $4=limit.
+func (r *UnitRepository) FindNearestAvailable(ctx context.Context, lat, lng float64, unitType string, limit int) ([]models.Unit, error) {
+	const q = `
+		SELECT ` + unitColumns + `,
+		       ST_Distance(location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS distance_m
+		FROM units
+		WHERE status = 'available'
+		  AND ($3 = '' OR type = $3)
+		ORDER BY location::geography <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+		LIMIT $4`
+	rows, err := r.pool.Query(ctx, q, lng, lat, unitType, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]models.Unit, 0, limit)
+	for rows.Next() {
+		var u models.Unit
+		if err := rows.Scan(
+			&u.ID, &u.CallSign, &u.Type, &u.Status,
+			&u.Longitude, &u.Latitude, &u.CreatedAt, &u.UpdatedAt, &u.DistanceMeters,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
