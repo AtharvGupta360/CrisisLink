@@ -1,0 +1,133 @@
+// Package service holds business logic: validation, domain rules (like the
+// incident status state machine), and orchestration across repositories. It sits
+// between handlers (HTTP) and repositories (data).
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/AtharvGupta360/CrisisLink/internal/models"
+	"github.com/AtharvGupta360/CrisisLink/internal/repository"
+)
+
+// Sentinel errors the handler maps to HTTP status codes.
+var (
+	ErrInvalidSeverity    = errors.New("invalid severity")
+	ErrInvalidCoordinates = errors.New("coordinates out of range")
+	ErrInvalidStatus      = errors.New("invalid status")
+	ErrIllegalTransition  = errors.New("illegal status transition")
+	ErrIncidentNotFound   = errors.New("incident not found")
+)
+
+var validSeverities = map[string]bool{
+	models.SeverityLow:      true,
+	models.SeverityMedium:   true,
+	models.SeverityHigh:     true,
+	models.SeverityCritical: true,
+}
+
+// allowedTransitions is the incident status STATE MACHINE: from a status, the
+// only legal next statuses are those listed. resolved and cancelled are terminal
+// (empty slice = no outgoing transitions). This is the single source of truth for
+// the lifecycle — trivially testable, no scattered if-checks.
+var allowedTransitions = map[string][]string{
+	models.StatusReported:   {models.StatusVerified, models.StatusCancelled},
+	models.StatusVerified:   {models.StatusDispatched, models.StatusCancelled},
+	models.StatusDispatched: {models.StatusResolved, models.StatusCancelled},
+	models.StatusResolved:   {},
+	models.StatusCancelled:  {},
+}
+
+// canTransition reports whether from -> to is a legal move in the state machine.
+func canTransition(from, to string) bool {
+	for _, allowed := range allowedTransitions[from] {
+		if allowed == to {
+			return true
+		}
+	}
+	return false
+}
+
+type IncidentService struct {
+	repo *repository.IncidentRepository
+}
+
+func NewIncidentService(repo *repository.IncidentRepository) *IncidentService {
+	return &IncidentService{repo: repo}
+}
+
+// CreateIncidentInput is the validated input for reporting an incident.
+type CreateIncidentInput struct {
+	ReporterID  string
+	Title       string
+	Description string
+	Severity    string
+	Latitude    float64
+	Longitude   float64
+}
+
+// Create validates and persists a new incident (status starts at 'reported').
+// Validation here is defense-in-depth: the handler validates too, but the service
+// must not trust its caller.
+func (s *IncidentService) Create(ctx context.Context, in CreateIncidentInput) (*models.Incident, error) {
+	if !validSeverities[in.Severity] {
+		return nil, ErrInvalidSeverity
+	}
+	if in.Latitude < -90 || in.Latitude > 90 || in.Longitude < -180 || in.Longitude > 180 {
+		return nil, ErrInvalidCoordinates
+	}
+
+	inc := &models.Incident{
+		ReporterID:  in.ReporterID,
+		Title:       in.Title,
+		Description: in.Description,
+		Severity:    in.Severity,
+		Latitude:    in.Latitude,
+		Longitude:   in.Longitude,
+	}
+	if err := s.repo.Create(ctx, inc); err != nil {
+		return nil, fmt.Errorf("create incident: %w", err)
+	}
+	return inc, nil
+}
+
+func (s *IncidentService) GetByID(ctx context.Context, id string) (*models.Incident, error) {
+	inc, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrIncidentNotFound
+		}
+		return nil, err
+	}
+	return inc, nil
+}
+
+func (s *IncidentService) List(ctx context.Context, limit, offset int) ([]models.Incident, error) {
+	return s.repo.List(ctx, limit, offset)
+}
+
+// UpdateStatus enforces the state machine: it loads the current status and
+// rejects any transition not permitted by allowedTransitions.
+func (s *IncidentService) UpdateStatus(ctx context.Context, id, newStatus string) (*models.Incident, error) {
+	if _, ok := allowedTransitions[newStatus]; !ok {
+		return nil, ErrInvalidStatus
+	}
+
+	inc, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrIncidentNotFound
+		}
+		return nil, err
+	}
+
+	if !canTransition(inc.Status, newStatus) {
+		return nil, fmt.Errorf("%w: %s -> %s", ErrIllegalTransition, inc.Status, newStatus)
+	}
+
+	return s.repo.UpdateStatus(ctx, id, newStatus)
+}

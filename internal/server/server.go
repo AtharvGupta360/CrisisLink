@@ -22,6 +22,7 @@ import (
 	"github.com/AtharvGupta360/CrisisLink/internal/handlers"
 	"github.com/AtharvGupta360/CrisisLink/internal/middleware"
 	"github.com/AtharvGupta360/CrisisLink/internal/repository"
+	"github.com/AtharvGupta360/CrisisLink/internal/service"
 )
 
 // NewServer builds the Gin engine: base middleware chain, health/ready probes,
@@ -71,6 +72,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 	authService := auth.NewService(userRepo, &cfg.JWT)
 	authHandler := handlers.NewAuthHandler(authService)
 
+	incidentRepo := repository.NewIncidentRepository(pool)
+	incidentService := service.NewIncidentService(incidentRepo)
+	incidentHandler := handlers.NewIncidentHandler(incidentService)
+
 	api := r.Group("/api/v1")
 	{
 		// Public auth routes (no token required).
@@ -91,6 +96,12 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 				"role":     c.GetString("role"),
 			})
 		})
+
+		// Incident routes — any authenticated user may report and read incidents.
+		protected.POST("/incidents", incidentHandler.Create)
+		protected.GET("/incidents", incidentHandler.List)
+		protected.GET("/incidents/:id", incidentHandler.GetByID)
+		protected.PATCH("/incidents/:id/status", incidentHandler.UpdateStatus)
 
 		// Admin-only routes: AdminRequired runs AFTER AuthRequired and checks the
 		// role it set. Real admin routes (rescue-unit CRUD, etc.) attach here later.
