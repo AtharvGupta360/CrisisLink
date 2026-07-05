@@ -12,16 +12,47 @@ import (
 	"github.com/AtharvGupta360/CrisisLink/internal/scoring"
 )
 
-// DispatchService coordinates incidents and units. It grows across the dispatch
-// phases: P11 candidate search (here), P12 scoring, P13 the reservation
-// transaction. It depends on both repositories (it spans two aggregates).
+// ErrUnitUnavailable and ErrIncidentNotDispatchable are the reservation-specific
+// business outcomes surfaced to the handler (mapped to 409 Conflict). The repo
+// signals these; the service re-expresses them as its own sentinels.
+var (
+	ErrUnitUnavailable         = errors.New("unit is not available for dispatch")
+	ErrIncidentNotDispatchable = errors.New("incident cannot be dispatched")
+)
+
+// DispatchService coordinates incidents, units, and dispatches. It grows across
+// the dispatch phases: P11 candidate search, P12 scoring, P13 the reservation
+// transaction (below). It spans three aggregates.
 type DispatchService struct {
-	incidents *repository.IncidentRepository
-	units     *repository.UnitRepository
+	incidents  *repository.IncidentRepository
+	units      *repository.UnitRepository
+	dispatches *repository.DispatchRepository
 }
 
-func NewDispatchService(incidents *repository.IncidentRepository, units *repository.UnitRepository) *DispatchService {
-	return &DispatchService{incidents: incidents, units: units}
+func NewDispatchService(incidents *repository.IncidentRepository, units *repository.UnitRepository, dispatches *repository.DispatchRepository) *DispatchService {
+	return &DispatchService{incidents: incidents, units: units, dispatches: dispatches}
+}
+
+// Reserve assigns a specific unit to an incident via the no-double-booking
+// transaction. It delegates the atomic work to the repository and translates the
+// repo's outcomes into service sentinels the handler maps to HTTP codes.
+func (s *DispatchService) Reserve(ctx context.Context, incidentID, unitID string) (*models.Dispatch, error) {
+	d, err := s.dispatches.Reserve(ctx, incidentID, unitID)
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrUnitNotFound):
+			return nil, ErrUnitNotFound
+		case errors.Is(err, repository.ErrUnitNotAvailable):
+			return nil, ErrUnitUnavailable
+		case errors.Is(err, repository.ErrIncidentNotFound):
+			return nil, ErrIncidentNotFound
+		case errors.Is(err, repository.ErrIncidentNotDispatchable):
+			return nil, ErrIncidentNotDispatchable
+		default:
+			return nil, err
+		}
+	}
+	return d, nil
 }
 
 // Candidates returns the incident and its dispatch candidates: the nearest

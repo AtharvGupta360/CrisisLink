@@ -55,3 +55,37 @@ func (h *DispatchHandler) Candidates(c *gin.Context) {
 		"candidates": candidates,
 	})
 }
+
+// dispatchRequest is the body of POST /incidents/:id/dispatch — which unit to send.
+type dispatchRequest struct {
+	UnitID string `json:"unitId" binding:"required"`
+}
+
+// Dispatch handles POST /incidents/:id/dispatch — reserve a chosen unit for the
+// incident via the no-double-booking transaction. 201 with the dispatch record on
+// success; 409 if the unit was already taken or the incident isn't dispatchable.
+func (h *DispatchHandler) Dispatch(c *gin.Context) {
+	var req dispatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, http.StatusBadRequest, "unitId is required", "VALIDATION_ERROR")
+		return
+	}
+
+	d, err := h.svc.Reserve(c.Request.Context(), c.Param("id"), req.UnitID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrIncidentNotFound):
+			common.Error(c, http.StatusNotFound, "incident not found", "NOT_FOUND")
+		case errors.Is(err, service.ErrUnitNotFound):
+			common.Error(c, http.StatusNotFound, "unit not found", "NOT_FOUND")
+		case errors.Is(err, service.ErrUnitUnavailable):
+			common.Error(c, http.StatusConflict, "unit is no longer available", "CONFLICT")
+		case errors.Is(err, service.ErrIncidentNotDispatchable):
+			common.Error(c, http.StatusConflict, "incident cannot be dispatched", "CONFLICT")
+		default:
+			common.Error(c, http.StatusInternalServerError, "could not dispatch unit", "INTERNAL_ERROR")
+		}
+		return
+	}
+	common.Success(c, http.StatusCreated, "unit dispatched", d)
+}

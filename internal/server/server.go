@@ -80,7 +80,8 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 	unitService := service.NewUnitService(unitRepo)
 	unitHandler := handlers.NewUnitHandler(unitService)
 
-	dispatchService := service.NewDispatchService(incidentRepo, unitRepo)
+	dispatchRepo := repository.NewDispatchRepository(pool)
+	dispatchService := service.NewDispatchService(incidentRepo, unitRepo, dispatchRepo)
 	dispatchHandler := handlers.NewDispatchHandler(dispatchService)
 
 	api := r.Group("/api/v1")
@@ -110,6 +111,9 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 		protected.GET("/incidents/nearby", incidentHandler.Nearby) // static route before :id
 		protected.GET("/incidents/:id", incidentHandler.GetByID)
 		protected.GET("/incidents/:id/candidates", dispatchHandler.Candidates) // nearest available units (KNN)
+		// Dispatch a unit — the no-double-booking reservation. Admin-only, since it
+		// mutates fleet state (like the other unit-status writes below).
+		protected.POST("/incidents/:id/dispatch", middleware.AdminRequired(), dispatchHandler.Dispatch)
 		protected.PATCH("/incidents/:id/status", incidentHandler.UpdateStatus)
 
 		// Rescue units — reads for any authenticated user, writes admin-only
