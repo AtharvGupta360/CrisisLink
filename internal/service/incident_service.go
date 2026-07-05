@@ -71,15 +71,33 @@ type CreateIncidentInput struct {
 	Longitude   float64
 }
 
-// Create validates and persists a new incident (status starts at 'reported').
+// Dedupe window: a report within this radius (meters) and time of an ACTIVE
+// incident is treated as another report of the SAME event, not a new incident.
+// Tuned tight on purpose — a false merge hides a distinct event (dangerous in a
+// life-safety system); a missed duplicate only adds noise. Single tunable place.
+const (
+	dedupeRadiusMeters  = 100.0
+	dedupeWindowMinutes = 15
+)
+
+// Create validates, then deduplicates. If an active incident was reported nearby
+// and recently, this report is merged into it (report_count incremented) and
+// returned with deduped=true. Otherwise a new incident is created (deduped=false).
 // Validation here is defense-in-depth: the handler validates too, but the service
 // must not trust its caller.
-func (s *IncidentService) Create(ctx context.Context, in CreateIncidentInput) (*models.Incident, error) {
+func (s *IncidentService) Create(ctx context.Context, in CreateIncidentInput) (*models.Incident, bool, error) {
 	if !validSeverities[in.Severity] {
-		return nil, ErrInvalidSeverity
+		return nil, false, ErrInvalidSeverity
 	}
 	if in.Latitude < -90 || in.Latitude > 90 || in.Longitude < -180 || in.Longitude > 180 {
-		return nil, ErrInvalidCoordinates
+		return nil, false, ErrInvalidCoordinates
+	}
+
+	// Dedupe first: merge into an existing active nearby-and-recent incident.
+	if dup, err := s.repo.TryDedupe(ctx, in.Latitude, in.Longitude, dedupeRadiusMeters, dedupeWindowMinutes); err == nil {
+		return dup, true, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, fmt.Errorf("dedupe check: %w", err)
 	}
 
 	inc := &models.Incident{
@@ -91,9 +109,9 @@ func (s *IncidentService) Create(ctx context.Context, in CreateIncidentInput) (*
 		Longitude:   in.Longitude,
 	}
 	if err := s.repo.Create(ctx, inc); err != nil {
-		return nil, fmt.Errorf("create incident: %w", err)
+		return nil, false, fmt.Errorf("create incident: %w", err)
 	}
-	return inc, nil
+	return inc, false, nil
 }
 
 func (s *IncidentService) GetByID(ctx context.Context, id string) (*models.Incident, error) {

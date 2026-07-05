@@ -29,6 +29,7 @@ type Incident struct {
 	Description string    `json:"description"`
 	Severity    string    `json:"severity"`
 	Status      string    `json:"status"`
+	ReportCount int       `json:"reportCount"`
 	Latitude    float64   `json:"latitude"`
 	Longitude   float64   `json:"longitude"`
 	CreatedAt   time.Time `json:"createdAt"`

@@ -24,13 +24,13 @@ type scanner interface {
 
 // incidentColumns is the shared projection. ST_X = longitude, ST_Y = latitude —
 // the column ORDER here must match scanIncident's Scan order exactly.
-const incidentColumns = `id::text, reporter_id::text, title, description, severity, status,
+const incidentColumns = `id::text, reporter_id::text, title, description, severity, status, report_count,
 	ST_X(location) AS longitude, ST_Y(location) AS latitude, created_at, updated_at`
 
 func scanIncident(s scanner, inc *models.Incident) error {
 	return s.Scan(
 		&inc.ID, &inc.ReporterID, &inc.Title, &inc.Description,
-		&inc.Severity, &inc.Status, &inc.Longitude, &inc.Latitude,
+		&inc.Severity, &inc.Status, &inc.ReportCount, &inc.Longitude, &inc.Latitude,
 		&inc.CreatedAt, &inc.UpdatedAt,
 	)
 }
@@ -42,11 +42,11 @@ func (r *IncidentRepository) Create(ctx context.Context, inc *models.Incident) e
 	const q = `
 		INSERT INTO incidents (reporter_id, title, description, severity, location)
 		VALUES ($1::uuid, $2, $3, $4, ST_SetSRID(ST_MakePoint($5, $6), 4326))
-		RETURNING id::text, status, created_at, updated_at`
+		RETURNING id::text, status, report_count, created_at, updated_at`
 	return r.pool.QueryRow(ctx, q,
 		inc.ReporterID, inc.Title, inc.Description, inc.Severity,
 		inc.Longitude, inc.Latitude, // $5 = lng, $6 = lat
-	).Scan(&inc.ID, &inc.Status, &inc.CreatedAt, &inc.UpdatedAt)
+	).Scan(&inc.ID, &inc.Status, &inc.ReportCount, &inc.CreatedAt, &inc.UpdatedAt)
 }
 
 // GetByID returns one incident. Returns pgx.ErrNoRows if not found (the service
@@ -120,7 +120,7 @@ func (r *IncidentRepository) FindWithinRadius(ctx context.Context, lat, lng, rad
 		var inc models.Incident
 		if err := rows.Scan(
 			&inc.ID, &inc.ReporterID, &inc.Title, &inc.Description,
-			&inc.Severity, &inc.Status, &inc.Longitude, &inc.Latitude,
+			&inc.Severity, &inc.Status, &inc.ReportCount, &inc.Longitude, &inc.Latitude,
 			&inc.CreatedAt, &inc.UpdatedAt, &inc.DistanceMeters,
 		); err != nil {
 			return nil, err
@@ -128,4 +128,33 @@ func (r *IncidentRepository) FindWithinRadius(ctx context.Context, lat, lng, rad
 		out = append(out, inc)
 	}
 	return out, rows.Err()
+}
+
+// TryDedupe looks for an ACTIVE incident reported within windowMinutes and
+// radiusMeters of (lat,lng); if found, it increments that incident's report_count
+// and returns it. Returns pgx.ErrNoRows when there is no duplicate (caller then
+// creates a new incident).
+//
+// It is ONE statement — the SELECT (find nearest active recent match) and the
+// UPDATE (increment) happen together, which shrinks the check-then-act race
+// versus doing them as two round-trips. The residual race (two concurrent FIRST
+// reports both finding no match) is inherent to check-then-insert; see P13.
+// Params: $1=lng, $2=lat, $3=windowMinutes, $4=radiusMeters.
+func (r *IncidentRepository) TryDedupe(ctx context.Context, lat, lng, radiusMeters float64, windowMinutes int) (*models.Incident, error) {
+	const q = `
+		UPDATE incidents SET report_count = report_count + 1, updated_at = now()
+		WHERE id = (
+			SELECT id FROM incidents
+			WHERE status IN ('reported', 'verified', 'dispatched')
+			  AND created_at > now() - make_interval(mins => $3)
+			  AND ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $4)
+			ORDER BY location::geography <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+			LIMIT 1
+		)
+		RETURNING ` + incidentColumns
+	var inc models.Incident
+	if err := scanIncident(r.pool.QueryRow(ctx, q, lng, lat, windowMinutes, radiusMeters), &inc); err != nil {
+		return nil, err
+	}
+	return &inc, nil
 }

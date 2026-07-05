@@ -39,7 +39,7 @@ func (h *IncidentHandler) Create(c *gin.Context) {
 
 	// The reporter is the authenticated caller — taken from the token, never the
 	// request body (a client can't report "as" someone else).
-	inc, err := h.svc.Create(c.Request.Context(), service.CreateIncidentInput{
+	inc, deduped, err := h.svc.Create(c.Request.Context(), service.CreateIncidentInput{
 		ReporterID:  c.GetString("userID"),
 		Title:       req.Title,
 		Description: req.Description,
@@ -53,6 +53,12 @@ func (h *IncidentHandler) Create(c *gin.Context) {
 			return
 		}
 		common.Error(c, http.StatusInternalServerError, "could not create incident", "INTERNAL_ERROR")
+		return
+	}
+
+	// Merged into an existing incident -> 200 (nothing new created); otherwise 201.
+	if deduped {
+		common.Success(c, http.StatusOK, "duplicate report merged into existing incident", inc)
 		return
 	}
 	common.Success(c, http.StatusCreated, "incident reported", inc)
