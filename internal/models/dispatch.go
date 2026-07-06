@@ -25,3 +25,54 @@ type Dispatch struct {
 	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
+
+// allowedDispatchTransitions is the dispatch lifecycle state machine (P15). A
+// dispatch moves forward through the active phases or is cancelled; completed and
+// cancelled are terminal. reserved is only ever the initial state, never a target.
+var allowedDispatchTransitions = map[string][]string{
+	DispatchReserved:  {DispatchEnRoute, DispatchCancelled},
+	DispatchEnRoute:   {DispatchOnScene, DispatchCancelled},
+	DispatchOnScene:   {DispatchCompleted, DispatchCancelled},
+	DispatchCompleted: {},
+	DispatchCancelled: {},
+}
+
+// IsValidDispatchStatus reports whether s is one of the known dispatch statuses.
+func IsValidDispatchStatus(s string) bool {
+	switch s {
+	case DispatchReserved, DispatchEnRoute, DispatchOnScene, DispatchCompleted, DispatchCancelled:
+		return true
+	}
+	return false
+}
+
+// CanTransitionDispatch reports whether from -> to is a legal lifecycle move.
+func CanTransitionDispatch(from, to string) bool {
+	for _, s := range allowedDispatchTransitions[from] {
+		if s == to {
+			return true
+		}
+	}
+	return false
+}
+
+// IsActiveDispatch reports whether a status counts as the dispatch still holding
+// its unit (matches the partial unique index's active set).
+func IsActiveDispatch(status string) bool {
+	return status == DispatchReserved || status == DispatchEnRoute || status == DispatchOnScene
+}
+
+// UnitStatusForDispatch maps a dispatch status to the unit status it implies:
+// active phases mirror onto the unit; terminal phases free it back to available.
+func UnitStatusForDispatch(dispatchStatus string) string {
+	switch dispatchStatus {
+	case DispatchReserved:
+		return UnitReserved
+	case DispatchEnRoute:
+		return UnitEnRoute
+	case DispatchOnScene:
+		return UnitOnScene
+	default: // completed, cancelled
+		return UnitAvailable
+	}
+}

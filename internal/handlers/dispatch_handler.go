@@ -103,3 +103,60 @@ func (h *DispatchHandler) Dispatch(c *gin.Context) {
 	}
 	common.Success(c, http.StatusCreated, "unit dispatched", d)
 }
+
+// ListByIncident handles GET /incidents/:id/dispatches — the incident's dispatches.
+func (h *DispatchHandler) ListByIncident(c *gin.Context) {
+	ds, err := h.svc.ListIncidentDispatches(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		common.Error(c, http.StatusInternalServerError, "could not list dispatches", "INTERNAL_ERROR")
+		return
+	}
+	common.Success(c, http.StatusOK, "incident dispatches", ds)
+}
+
+// Get handles GET /dispatches/:id — a single dispatch.
+func (h *DispatchHandler) Get(c *gin.Context) {
+	d, err := h.svc.GetDispatch(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		if errors.Is(err, service.ErrDispatchNotFound) {
+			common.Error(c, http.StatusNotFound, "dispatch not found", "NOT_FOUND")
+			return
+		}
+		common.Error(c, http.StatusInternalServerError, "could not fetch dispatch", "INTERNAL_ERROR")
+		return
+	}
+	common.Success(c, http.StatusOK, "dispatch", d)
+}
+
+// advanceStatusRequest is the body of PATCH /dispatches/:id/status. reserved is
+// omitted — it's only ever the initial state, never a transition target.
+type advanceStatusRequest struct {
+	Status string `json:"status" binding:"required,oneof=en_route on_scene completed cancelled"`
+}
+
+// AdvanceStatus handles PATCH /dispatches/:id/status — move a dispatch along its
+// lifecycle. The unit's status is synced and the incident auto-resolves when its
+// last active dispatch completes (all handled atomically in the service/repo).
+func (h *DispatchHandler) AdvanceStatus(c *gin.Context) {
+	var req advanceStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, http.StatusBadRequest, "status must be one of en_route, on_scene, completed, cancelled", "VALIDATION_ERROR")
+		return
+	}
+
+	d, err := h.svc.AdvanceStatus(c.Request.Context(), c.Param("id"), req.Status)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrDispatchNotFound):
+			common.Error(c, http.StatusNotFound, "dispatch not found", "NOT_FOUND")
+		case errors.Is(err, service.ErrIllegalDispatchTransition):
+			common.Error(c, http.StatusConflict, "illegal status transition", "CONFLICT")
+		case errors.Is(err, service.ErrInvalidDispatchStatus):
+			common.Error(c, http.StatusBadRequest, "invalid dispatch status", "VALIDATION_ERROR")
+		default:
+			common.Error(c, http.StatusInternalServerError, "could not update dispatch", "INTERNAL_ERROR")
+		}
+		return
+	}
+	common.Success(c, http.StatusOK, "dispatch updated", d)
+}

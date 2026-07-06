@@ -114,7 +114,13 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 		// Dispatch a unit — the no-double-booking reservation. Admin-only, since it
 		// mutates fleet state (like the other unit-status writes below).
 		protected.POST("/incidents/:id/dispatch", middleware.AdminRequired(), dispatchHandler.Dispatch)
+		protected.GET("/incidents/:id/dispatches", dispatchHandler.ListByIncident) // an incident's dispatches
 		protected.PATCH("/incidents/:id/status", incidentHandler.UpdateStatus)
+
+		// Dispatch lifecycle (P15). Reads for any authenticated user; advancing the
+		// state machine is admin-only (it mutates unit + incident state).
+		protected.GET("/dispatches/:id", dispatchHandler.Get)
+		protected.PATCH("/dispatches/:id/status", middleware.AdminRequired(), dispatchHandler.AdvanceStatus)
 
 		// Rescue units — reads for any authenticated user, writes admin-only
 		// (per-route AdminRequired runs after the group's AuthRequired).

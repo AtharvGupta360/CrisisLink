@@ -20,6 +20,11 @@ var (
 	ErrIncidentNotDispatchable = errors.New("incident cannot be dispatched")
 	// ErrReservationConflict surfaces the optimistic path exhausting its retries.
 	ErrReservationConflict = errors.New("reservation conflicted, please retry")
+
+	// P15 lifecycle sentinels.
+	ErrDispatchNotFound          = errors.New("dispatch not found")
+	ErrInvalidDispatchStatus     = errors.New("invalid dispatch status")
+	ErrIllegalDispatchTransition = errors.New("illegal dispatch status transition")
 )
 
 // ReserveStrategy selects the concurrency-control approach for a reservation.
@@ -73,6 +78,43 @@ func (s *DispatchService) Reserve(ctx context.Context, incidentID, unitID string
 			return nil, ErrIncidentNotDispatchable
 		case errors.Is(err, repository.ErrReservationConflict):
 			return nil, ErrReservationConflict
+		default:
+			return nil, err
+		}
+	}
+	return d, nil
+}
+
+// GetDispatch returns a single dispatch by id.
+func (s *DispatchService) GetDispatch(ctx context.Context, id string) (*models.Dispatch, error) {
+	d, err := s.dispatches.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrDispatchNotFound
+		}
+		return nil, err
+	}
+	return d, nil
+}
+
+// ListIncidentDispatches returns all dispatches for an incident.
+func (s *DispatchService) ListIncidentDispatches(ctx context.Context, incidentID string) ([]models.Dispatch, error) {
+	return s.dispatches.ListByIncident(ctx, incidentID)
+}
+
+// AdvanceStatus moves a dispatch along its lifecycle (validates the target status,
+// then delegates the atomic transition + unit/incident sync to the repository).
+func (s *DispatchService) AdvanceStatus(ctx context.Context, dispatchID, newStatus string) (*models.Dispatch, error) {
+	if !models.IsValidDispatchStatus(newStatus) {
+		return nil, ErrInvalidDispatchStatus
+	}
+	d, err := s.dispatches.AdvanceStatus(ctx, dispatchID, newStatus)
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrDispatchNotFound):
+			return nil, ErrDispatchNotFound
+		case errors.Is(err, repository.ErrIllegalDispatchTransition):
+			return nil, ErrIllegalDispatchTransition
 		default:
 			return nil, err
 		}

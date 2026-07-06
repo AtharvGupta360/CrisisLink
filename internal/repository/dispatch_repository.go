@@ -24,7 +24,18 @@ var (
 	// compare-and-swap to concurrent (benign) writers until retries ran out. The
 	// caller can just try again.
 	ErrReservationConflict = errors.New("reservation conflict, retries exhausted")
+
+	// P15 lifecycle outcomes.
+	ErrDispatchNotFound          = errors.New("dispatch not found")
+	ErrIllegalDispatchTransition = errors.New("illegal dispatch transition")
 )
+
+// dispatchColumns is the standard projection; order must match scanDispatch.
+const dispatchColumns = `id::text, incident_id::text, unit_id::text, status, created_at, updated_at`
+
+func scanDispatch(s scanner, d *models.Dispatch) error {
+	return s.Scan(&d.ID, &d.IncidentID, &d.UnitID, &d.Status, &d.CreatedAt, &d.UpdatedAt)
+}
 
 // maxOptimisticRetries caps how many times the optimistic path re-reads and
 // retries the compare-and-swap before giving up with ErrReservationConflict.
@@ -243,4 +254,113 @@ func (r *DispatchRepository) tryReserveOptimistic(ctx context.Context, incidentI
 		return nil, false, err
 	}
 	return &d, false, nil
+}
+
+// GetByID returns a single dispatch.
+func (r *DispatchRepository) GetByID(ctx context.Context, id string) (*models.Dispatch, error) {
+	const q = `SELECT ` + dispatchColumns + ` FROM dispatches WHERE id = $1::uuid`
+	var d models.Dispatch
+	if err := scanDispatch(r.pool.QueryRow(ctx, q, id), &d); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// ListByIncident returns an incident's dispatches, newest first.
+func (r *DispatchRepository) ListByIncident(ctx context.Context, incidentID string) ([]models.Dispatch, error) {
+	const q = `SELECT ` + dispatchColumns + ` FROM dispatches WHERE incident_id = $1::uuid ORDER BY created_at DESC`
+	rows, err := r.pool.Query(ctx, q, incidentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]models.Dispatch, 0)
+	for rows.Next() {
+		var d models.Dispatch
+		if err := scanDispatch(rows, &d); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// AdvanceStatus moves a dispatch along its lifecycle and keeps everything in sync,
+// atomically. It applies the P13 locking lesson to a new row: the dispatch itself
+// is a check-then-act target (two admins could patch it at once), so we lock it
+// FOR UPDATE, re-read, validate the transition, then in the same transaction:
+//   - update the dispatch status,
+//   - sync the UNIT status (mirror the active phase, or free it to available),
+//   - if the dispatch just completed and no active dispatches remain for the
+//     incident, resolve the incident.
+func (r *DispatchRepository) AdvanceStatus(ctx context.Context, dispatchID, newStatus string) (*models.Dispatch, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Lock the dispatch row and read its current state.
+	var cur models.Dispatch
+	err = scanDispatch(
+		tx.QueryRow(ctx, `SELECT `+dispatchColumns+` FROM dispatches WHERE id = $1::uuid FOR UPDATE`, dispatchID),
+		&cur,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrDispatchNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate the transition under the lock.
+	if !models.CanTransitionDispatch(cur.Status, newStatus) {
+		return nil, ErrIllegalDispatchTransition
+	}
+
+	// Update the dispatch.
+	var d models.Dispatch
+	err = scanDispatch(
+		tx.QueryRow(ctx,
+			`UPDATE dispatches SET status = $1, updated_at = now() WHERE id = $2::uuid RETURNING `+dispatchColumns,
+			newStatus, dispatchID,
+		),
+		&d,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Sync the unit: active phase mirrors onto the unit; terminal frees it.
+	if _, err = tx.Exec(ctx,
+		`UPDATE units SET status = $1, version = version + 1, updated_at = now() WHERE id = $2::uuid`,
+		models.UnitStatusForDispatch(newStatus), cur.UnitID,
+	); err != nil {
+		return nil, err
+	}
+
+	// If this completed the last active dispatch, resolve the incident.
+	if newStatus == models.DispatchCompleted {
+		var active int
+		if err = tx.QueryRow(ctx,
+			`SELECT count(*) FROM dispatches WHERE incident_id = $1::uuid AND status IN ('reserved','en_route','on_scene')`,
+			cur.IncidentID,
+		).Scan(&active); err != nil {
+			return nil, err
+		}
+		if active == 0 {
+			if _, err = tx.Exec(ctx,
+				`UPDATE incidents SET status = 'resolved', updated_at = now() WHERE id = $1::uuid AND status = 'dispatched'`,
+				cur.IncidentID,
+			); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &d, nil
 }
