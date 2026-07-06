@@ -18,6 +18,19 @@ import (
 var (
 	ErrUnitUnavailable         = errors.New("unit is not available for dispatch")
 	ErrIncidentNotDispatchable = errors.New("incident cannot be dispatched")
+	// ErrReservationConflict surfaces the optimistic path exhausting its retries.
+	ErrReservationConflict = errors.New("reservation conflicted, please retry")
+)
+
+// ReserveStrategy selects the concurrency-control approach for a reservation.
+// Pessimistic (P13) locks the unit row up front; optimistic (P14) uses a version
+// compare-and-swap with retries. Same guarantee (no double-booking), different
+// mechanics — the endpoint exposes both so they can be compared.
+type ReserveStrategy string
+
+const (
+	StrategyPessimistic ReserveStrategy = "pessimistic"
+	StrategyOptimistic  ReserveStrategy = "optimistic"
 )
 
 // DispatchService coordinates incidents, units, and dispatches. It grows across
@@ -34,10 +47,20 @@ func NewDispatchService(incidents *repository.IncidentRepository, units *reposit
 }
 
 // Reserve assigns a specific unit to an incident via the no-double-booking
-// transaction. It delegates the atomic work to the repository and translates the
-// repo's outcomes into service sentinels the handler maps to HTTP codes.
-func (s *DispatchService) Reserve(ctx context.Context, incidentID, unitID string) (*models.Dispatch, error) {
-	d, err := s.dispatches.Reserve(ctx, incidentID, unitID)
+// transaction, using the chosen concurrency-control strategy. It delegates the
+// atomic work to the repository and translates the repo's outcomes into service
+// sentinels the handler maps to HTTP codes.
+func (s *DispatchService) Reserve(ctx context.Context, incidentID, unitID string, strategy ReserveStrategy) (*models.Dispatch, error) {
+	var (
+		d   *models.Dispatch
+		err error
+	)
+	switch strategy {
+	case StrategyOptimistic:
+		d, err = s.dispatches.ReserveOptimistic(ctx, incidentID, unitID)
+	default: // pessimistic is the production default
+		d, err = s.dispatches.Reserve(ctx, incidentID, unitID)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, repository.ErrUnitNotFound):
@@ -48,6 +71,8 @@ func (s *DispatchService) Reserve(ctx context.Context, incidentID, unitID string
 			return nil, ErrIncidentNotFound
 		case errors.Is(err, repository.ErrIncidentNotDispatchable):
 			return nil, ErrIncidentNotDispatchable
+		case errors.Is(err, repository.ErrReservationConflict):
+			return nil, ErrReservationConflict
 		default:
 			return nil, err
 		}

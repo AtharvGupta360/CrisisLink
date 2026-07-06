@@ -1,0 +1,13 @@
+-- version powers OPTIMISTIC concurrency control (P14), the counterpart to the
+-- pessimistic SELECT ... FOR UPDATE of P13.
+--
+-- Every mutation of a unit row bumps version. A reservation reads (status,
+-- version), then writes WHERE version = <the value it read>: if a concurrent
+-- transaction changed the row in between, version has moved, the UPDATE matches
+-- zero rows, and the loser retries instead of having blocked on a lock.
+--
+-- Optimistic (this) vs pessimistic (P13): optimistic never locks during
+-- "think time" — it only detects a collision at write time. Best when contention
+-- is LOW (conflicts rare, so retries rare). Pessimistic is best when contention is
+-- HIGH (blocking beats thrashing on retries).
+ALTER TABLE units ADD COLUMN version INTEGER NOT NULL DEFAULT 1;

@@ -71,7 +71,19 @@ func (h *DispatchHandler) Dispatch(c *gin.Context) {
 		return
 	}
 
-	d, err := h.svc.Reserve(c.Request.Context(), c.Param("id"), req.UnitID)
+	// ?strategy=pessimistic (default) | optimistic — the concurrency-control approach.
+	strategy := service.StrategyPessimistic
+	switch c.Query("strategy") {
+	case "", string(service.StrategyPessimistic):
+		strategy = service.StrategyPessimistic
+	case string(service.StrategyOptimistic):
+		strategy = service.StrategyOptimistic
+	default:
+		common.Error(c, http.StatusBadRequest, "strategy must be 'pessimistic' or 'optimistic'", "VALIDATION_ERROR")
+		return
+	}
+
+	d, err := h.svc.Reserve(c.Request.Context(), c.Param("id"), req.UnitID, strategy)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrIncidentNotFound):
@@ -82,6 +94,8 @@ func (h *DispatchHandler) Dispatch(c *gin.Context) {
 			common.Error(c, http.StatusConflict, "unit is no longer available", "CONFLICT")
 		case errors.Is(err, service.ErrIncidentNotDispatchable):
 			common.Error(c, http.StatusConflict, "incident cannot be dispatched", "CONFLICT")
+		case errors.Is(err, service.ErrReservationConflict):
+			common.Error(c, http.StatusConflict, "reservation conflicted, please retry", "CONFLICT")
 		default:
 			common.Error(c, http.StatusInternalServerError, "could not dispatch unit", "INTERNAL_ERROR")
 		}

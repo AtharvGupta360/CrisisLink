@@ -77,7 +77,7 @@ func (r *UnitRepository) List(ctx context.Context, status, unitType string, limi
 // transitions come in P15) and returns the updated unit.
 func (r *UnitRepository) UpdateStatus(ctx context.Context, id, status string) (*models.Unit, error) {
 	const q = `
-		UPDATE units SET status = $1, updated_at = now()
+		UPDATE units SET status = $1, version = version + 1, updated_at = now()
 		WHERE id = $2::uuid
 		RETURNING ` + unitColumns
 	var u models.Unit
