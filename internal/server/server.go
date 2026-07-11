@@ -84,6 +84,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 	dispatchService := service.NewDispatchService(incidentRepo, unitRepo, dispatchRepo)
 	dispatchHandler := handlers.NewDispatchHandler(dispatchService)
 
+	shelterRepo := repository.NewShelterRepository(pool)
+	shelterService := service.NewShelterService(shelterRepo)
+	shelterHandler := handlers.NewShelterHandler(shelterService)
+
 	api := r.Group("/api/v1")
 	{
 		// Public auth routes (no token required).
@@ -128,6 +132,13 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 		protected.GET("/units/:id", unitHandler.GetByID)
 		protected.POST("/units", middleware.AdminRequired(), unitHandler.Create)
 		protected.PATCH("/units/:id/status", middleware.AdminRequired(), unitHandler.UpdateStatus)
+
+		// Shelters — reads for any authenticated user, writes admin-only (mirrors
+		// the unit registry). Occupancy changes come from P18 assignment, not here.
+		protected.GET("/shelters", shelterHandler.List)
+		protected.GET("/shelters/:id", shelterHandler.GetByID)
+		protected.POST("/shelters", middleware.AdminRequired(), shelterHandler.Create)
+		protected.PATCH("/shelters/:id/status", middleware.AdminRequired(), shelterHandler.UpdateStatus)
 
 		// Admin-only routes: AdminRequired runs AFTER AuthRequired and checks the
 		// role it set. Real admin routes (rescue-unit CRUD, etc.) attach here later.
