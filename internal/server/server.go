@@ -88,6 +88,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 	shelterService := service.NewShelterService(shelterRepo)
 	shelterHandler := handlers.NewShelterHandler(shelterService)
 
+	victimRepo := repository.NewVictimRepository(pool)
+	victimService := service.NewVictimService(victimRepo, shelterRepo)
+	victimHandler := handlers.NewVictimHandler(victimService)
+
 	api := r.Group("/api/v1")
 	{
 		// Public auth routes (no token required).
@@ -139,6 +143,16 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 		protected.GET("/shelters/:id", shelterHandler.GetByID)
 		protected.POST("/shelters", middleware.AdminRequired(), shelterHandler.Create)
 		protected.PATCH("/shelters/:id/status", middleware.AdminRequired(), shelterHandler.UpdateStatus)
+
+		// Victims — intake and reads for any authenticated user (like incident
+		// reporting). Assignment to a shelter (with the capacity guard) is P18.
+		protected.POST("/victims", victimHandler.Create)
+		protected.GET("/victims", victimHandler.List)
+		protected.GET("/victims/:id", victimHandler.GetByID)
+		protected.GET("/victims/:id/shelters", victimHandler.NearestShelters) // nearest open shelters (KNN)
+		// Assign a victim to a shelter — the no-overflow transaction. Admin-only
+		// (mutates shelter occupancy), mirroring the dispatch reservation.
+		protected.POST("/victims/:id/assign", middleware.AdminRequired(), victimHandler.Assign)
 
 		// Admin-only routes: AdminRequired runs AFTER AuthRequired and checks the
 		// role it set. Real admin routes (rescue-unit CRUD, etc.) attach here later.
