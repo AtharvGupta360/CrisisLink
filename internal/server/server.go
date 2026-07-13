@@ -92,6 +92,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 	victimService := service.NewVictimService(victimRepo, shelterRepo)
 	victimHandler := handlers.NewVictimHandler(victimService)
 
+	outboxRepo := repository.NewOutboxRepository(pool)
+	outboxService := service.NewOutboxService(outboxRepo)
+	outboxHandler := handlers.NewOutboxHandler(outboxService)
+
 	api := r.Group("/api/v1")
 	{
 		// Public auth routes (no token required).
@@ -164,6 +168,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 					"role": c.GetString("role"),
 				})
 			})
+
+			// Ops view onto the transactional outbox (P19). The relay (P20) will
+			// publish these and flip published_at.
+			admin.GET("/outbox", outboxHandler.List)
 		}
 	}
 

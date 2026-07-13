@@ -165,6 +165,16 @@ func (r *VictimRepository) Assign(ctx context.Context, victimID, shelterID strin
 		return nil, nil, err
 	}
 
+	// 5. Emit the domain event in the same transaction (transactional outbox), so
+	//    the event commits atomically with the assignment.
+	if err = writeOutbox(ctx, tx, models.AggregateVictim, v.ID, models.EventVictimAssigned, map[string]any{
+		"victimId":         v.ID,
+		"shelterId":        sh.ID,
+		"shelterOccupancy": sh.Occupancy,
+	}); err != nil {
+		return nil, nil, err
+	}
+
 	if err = tx.Commit(ctx); err != nil {
 		return nil, nil, err
 	}

@@ -140,6 +140,16 @@ func (r *DispatchRepository) Reserve(ctx context.Context, incidentID, unitID str
 		return nil, err
 	}
 
+	// 7. Emit the domain event INTO THE SAME TRANSACTION (transactional outbox).
+	//    The event commits atomically with the reservation — no dual-write gap.
+	if err = writeOutbox(ctx, tx, models.AggregateDispatch, d.ID, models.EventDispatchCreated, map[string]any{
+		"dispatchId": d.ID,
+		"incidentId": d.IncidentID,
+		"unitId":     d.UnitID,
+	}); err != nil {
+		return nil, err
+	}
+
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -247,6 +257,15 @@ func (r *DispatchRepository) tryReserveOptimistic(ctx context.Context, incidentI
 		 WHERE id = $1::uuid AND status IN ('reported','verified')`,
 		incidentID,
 	); err != nil {
+		return nil, false, err
+	}
+
+	// 6. Emit the domain event in the same transaction (transactional outbox).
+	if err = writeOutbox(ctx, tx, models.AggregateDispatch, d.ID, models.EventDispatchCreated, map[string]any{
+		"dispatchId": d.ID,
+		"incidentId": d.IncidentID,
+		"unitId":     d.UnitID,
+	}); err != nil {
 		return nil, false, err
 	}
 
