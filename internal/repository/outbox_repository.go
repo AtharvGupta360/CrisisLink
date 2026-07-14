@@ -45,6 +45,70 @@ func scanOutbox(s scanner, e *models.OutboxEvent) error {
 	)
 }
 
+// PublishBatch drains up to `limit` unpublished events: it claims a batch with
+// FOR UPDATE SKIP LOCKED (so multiple relay workers grab disjoint batches and
+// never double-publish), calls publish() for each, then stamps published_at on the
+// ones that succeeded — all in one transaction.
+//
+// Ordering is deliberate: publish FIRST, mark AFTER (the mark commits last). A
+// crash after publishing but before commit leaves the row unpublished → it will be
+// republished (at-least-once). Marking before publishing would instead LOSE events.
+// If publish() fails mid-batch, we still commit the ones already published (partial
+// progress) and stop; the rest are retried next tick.
+func (r *OutboxRepository) PublishBatch(ctx context.Context, limit int, publish func(models.OutboxEvent) error) (int, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Claim a batch. SKIP LOCKED = don't wait on rows another worker holds.
+	rows, err := tx.Query(ctx,
+		`SELECT `+outboxColumns+` FROM outbox_events
+		 WHERE published_at IS NULL
+		 ORDER BY id
+		 LIMIT $1
+		 FOR UPDATE SKIP LOCKED`, limit)
+	if err != nil {
+		return 0, err
+	}
+	events := make([]models.OutboxEvent, 0, limit)
+	for rows.Next() {
+		var e models.OutboxEvent
+		if err := scanOutbox(rows, &e); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		events = append(events, e)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	// Publish first, collect the ids that made it. Stop at the first failure.
+	publishedIDs := make([]int64, 0, len(events))
+	var pubErr error
+	for i := range events {
+		if pubErr = publish(events[i]); pubErr != nil {
+			break
+		}
+		publishedIDs = append(publishedIDs, events[i].ID)
+	}
+
+	if len(publishedIDs) > 0 {
+		if _, err = tx.Exec(ctx,
+			`UPDATE outbox_events SET published_at = now() WHERE id = ANY($1)`, publishedIDs,
+		); err != nil {
+			return 0, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return len(publishedIDs), pubErr
+}
+
 // ListRecent returns the most recent outbox events (published or not), newest
 // first — an ops view onto the event stream.
 func (r *OutboxRepository) ListRecent(ctx context.Context, limit int) ([]models.OutboxEvent, error) {
