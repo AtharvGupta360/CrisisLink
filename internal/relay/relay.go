@@ -20,16 +20,6 @@ type Publisher interface {
 	Publish(ctx context.Context, key string, value []byte) error
 }
 
-// envelope is the on-the-wire shape of a published event.
-type envelope struct {
-	ID            int64           `json:"id"`
-	EventType     string          `json:"eventType"`
-	AggregateType string          `json:"aggregateType"`
-	AggregateID   string          `json:"aggregateId"`
-	Payload       json.RawMessage `json:"payload"`
-	OccurredAt    time.Time       `json:"occurredAt"`
-}
-
 // Relay polls the outbox on an interval and publishes unpublished events.
 type Relay struct {
 	outbox   *repository.OutboxRepository
@@ -64,7 +54,7 @@ func (r *Relay) Run(ctx context.Context) error {
 func (r *Relay) drain(ctx context.Context) {
 	for {
 		n, err := r.outbox.PublishBatch(ctx, r.batch, func(e models.OutboxEvent) error {
-			value, merr := json.Marshal(envelope{
+			value, merr := json.Marshal(models.EventEnvelope{
 				ID:            e.ID,
 				EventType:     e.EventType,
 				AggregateType: e.AggregateType,

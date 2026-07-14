@@ -10,7 +10,7 @@ server:
 
 database:
   host: 127.0.0.1
-  port: 5433             # compose maps host 5433 -> container 5432
+  port: 15432             # compose maps host 15432 -> container 5432
   user: crisislink
   password: your-db-password
   dbname: crisislink

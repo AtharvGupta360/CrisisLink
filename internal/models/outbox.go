@@ -29,3 +29,17 @@ type OutboxEvent struct {
 	CreatedAt     time.Time       `json:"createdAt"`
 	PublishedAt   *time.Time      `json:"publishedAt"` // nil until relayed
 }
+
+// EventEnvelope is the on-the-wire shape of a published event (relay -> Kafka ->
+// consumers). Defined here so producer and consumer share one contract.
+//
+// ID is the outbox event id and doubles as the IDEMPOTENCY KEY: it stays the same
+// across redeliveries, whereas a Kafka offset would differ for a republished event.
+type EventEnvelope struct {
+	ID            int64           `json:"id"`
+	EventType     string          `json:"eventType"`
+	AggregateType string          `json:"aggregateType"`
+	AggregateID   string          `json:"aggregateId"`
+	Payload       json.RawMessage `json:"payload"`
+	OccurredAt    time.Time       `json:"occurredAt"`
+}

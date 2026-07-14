@@ -91,7 +91,7 @@ func LoadConfig(path string) (*Config, error) {
 	viper.SetDefault("server.shutdown_timeout", 30)
 
 	viper.SetDefault("database.host", "127.0.0.1")
-	viper.SetDefault("database.port", 5433) // container maps 5433->5432 (native PG owns 5432)
+	viper.SetDefault("database.port", 15432) // compose maps 15432->5432 (5432 taken by native PG; 5433-5532 reserved by WinNAT)
 	viper.SetDefault("database.user", "crisislink")
 	viper.SetDefault("database.password", "crisislink_dev_pw")
 	viper.SetDefault("database.dbname", "crisislink")

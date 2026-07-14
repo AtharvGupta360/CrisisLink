@@ -96,6 +96,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 	outboxService := service.NewOutboxService(outboxRepo)
 	outboxHandler := handlers.NewOutboxHandler(outboxService)
 
+	notificationRepo := repository.NewNotificationRepository(pool)
+	notificationService := service.NewNotificationService(notificationRepo)
+	notificationHandler := handlers.NewNotificationHandler(notificationService)
+
 	api := r.Group("/api/v1")
 	{
 		// Public auth routes (no token required).
@@ -172,6 +176,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 			// Ops view onto the transactional outbox (P19). The relay (P20) will
 			// publish these and flip published_at.
 			admin.GET("/outbox", outboxHandler.List)
+
+			// What the idempotent consumer produced (P21) — exactly one per event,
+			// even if Kafka delivered it twice.
+			admin.GET("/notifications", notificationHandler.List)
 		}
 	}
 
