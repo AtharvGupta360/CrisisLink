@@ -376,6 +376,16 @@ func (r *DispatchRepository) AdvanceStatus(ctx context.Context, dispatchID, newS
 				return nil, err
 			}
 		}
+
+		// Emit the completion event in the SAME transaction (outbox, P19/P22).
+		if err = writeOutbox(ctx, tx, models.AggregateDispatch, d.ID, models.EventDispatchCompleted, map[string]any{
+			"dispatchId":       d.ID,
+			"incidentId":       d.IncidentID,
+			"unitId":           d.UnitID,
+			"incidentResolved": active == 0,
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	if err = tx.Commit(ctx); err != nil {

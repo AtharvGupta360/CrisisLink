@@ -16,6 +16,7 @@ import (
 	"github.com/AtharvGupta360/CrisisLink/internal/config"
 	"github.com/AtharvGupta360/CrisisLink/internal/consumer"
 	"github.com/AtharvGupta360/CrisisLink/internal/database"
+	"github.com/AtharvGupta360/CrisisLink/internal/relay"
 	"github.com/AtharvGupta360/CrisisLink/internal/repository"
 )
 
@@ -38,7 +39,20 @@ func main() {
 	defer pool.Close()
 
 	inbox := repository.NewInboxRepository(pool)
-	c := consumer.New(cfg.Kafka.Brokers, cfg.Kafka.Topic, consumerGroup, inbox, common.Logger)
+
+	// Make sure both topics exist before we read/write them.
+	for _, t := range []string{cfg.Kafka.Topic, cfg.Kafka.DLQTopic} {
+		if err := relay.EnsureTopic(cfg.Kafka.Brokers, t, 1); err != nil {
+			common.Logger.Fatalf("ensure kafka topic %s: %v", t, err)
+		}
+	}
+
+	// Messages that exhaust their retries (or can't be decoded) go here instead of
+	// blocking the partition forever.
+	dlq := relay.NewKafkaPublisher(cfg.Kafka.Brokers, cfg.Kafka.DLQTopic)
+	defer dlq.Close()
+
+	c := consumer.New(cfg.Kafka.Brokers, cfg.Kafka.Topic, consumerGroup, inbox, dlq, common.Logger)
 	defer c.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

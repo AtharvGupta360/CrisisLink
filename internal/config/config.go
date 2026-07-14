@@ -62,8 +62,9 @@ type RedisConfig struct {
 }
 
 type KafkaConfig struct {
-	Brokers []string `mapstructure:"brokers"` // e.g. ["localhost:9092"]
-	Topic   string   `mapstructure:"topic"`   // outbox events land here
+	Brokers  []string `mapstructure:"brokers"`  // e.g. ["localhost:9092"]
+	Topic    string   `mapstructure:"topic"`    // outbox events land here
+	DLQTopic string   `mapstructure:"dlqTopic"` // messages that exhausted retries (P22)
 }
 
 type CORSConfig struct {
@@ -110,6 +111,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	viper.SetDefault("kafka.brokers", []string{"localhost:9092"})
 	viper.SetDefault("kafka.topic", "crisislink.events")
+	viper.SetDefault("kafka.dlqTopic", "crisislink.events.dlq")
 
 	viper.SetDefault("cors.allowedOrigins", []string{"http://localhost:3000", "http://localhost:5173"})
 	viper.SetDefault("cors.allowedMethods", []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"})

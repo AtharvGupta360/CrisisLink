@@ -14,8 +14,9 @@ const (
 // Event types. Namespaced <aggregate>.<past-tense-fact> — events describe things
 // that already happened.
 const (
-	EventDispatchCreated = "dispatch.created"
-	EventVictimAssigned  = "victim.assigned"
+	EventDispatchCreated   = "dispatch.created"
+	EventDispatchCompleted = "dispatch.completed"
+	EventVictimAssigned    = "victim.assigned"
 )
 
 // OutboxEvent is one row of the transactional outbox. It is written in the same
