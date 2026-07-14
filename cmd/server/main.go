@@ -33,7 +33,16 @@ func main() {
 	defer pool.Close()
 	common.Logger.Info("database pool ready")
 
-	router := server.NewServer(cfg, pool)
+	// Redis: shared, cross-replica state (rate-limit token buckets). Ping-on-boot
+	// for the same fail-fast reason as the DB.
+	rdb, err := database.NewRedisConnection(&cfg.Redis)
+	if err != nil {
+		common.Logger.Fatalf("redis connection failed: %v", err)
+	}
+	defer rdb.Close()
+	common.Logger.Info("redis ready")
+
+	router := server.NewServer(cfg, pool, rdb)
 	if err := server.Run(router, cfg); err != nil {
 		common.Logger.Errorf("server exited with error: %v", err)
 	}

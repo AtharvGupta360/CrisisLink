@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/auth"
 	"github.com/AtharvGupta360/CrisisLink/internal/common"
@@ -28,7 +29,7 @@ import (
 // NewServer builds the Gin engine: base middleware chain, health/ready probes,
 // and (in later phases) the /api/v1 route groups with their injected
 // handler -> service -> repository stacks.
-func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
+func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.Engine {
 	gin.SetMode(cfg.Server.Mode)
 
 	// gin.New() (bare) not gin.Default() — we own the chain explicitly. Order
@@ -39,7 +40,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *gin.Engine {
 	r.Use(
 		middleware.CORS(&cfg.CORS),
 		middleware.RequestID(),
-		middleware.RateLimiter(middleware.RateLimiterConfig{
+		// Rate limit state lives in REDIS, not in this process's memory, so the
+		// limit holds across every API replica (an in-process map would give each
+		// replica its own private budget). Token bucket, evaluated atomically.
+		middleware.RedisRateLimiter(rdb, middleware.RedisRateLimiterConfig{
 			RequestsPerSecond: 10, // sustained per-IP rate
 			BurstSize:         20, // tolerate short spikes
 		}),
