@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/incident"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/metrics"
 	"github.com/AtharvGupta360/CrisisLink/internal/presence"
 	"github.com/AtharvGupta360/CrisisLink/internal/scoring"
 	"github.com/AtharvGupta360/CrisisLink/internal/unit"
@@ -84,12 +86,14 @@ func (s *DispatchService) Reserve(ctx context.Context, incidentID, unitID string
 		case errors.Is(err, ErrUnitNotFound):
 			return nil, unit.ErrUnitNotFound
 		case errors.Is(err, ErrUnitNotAvailable):
+			metrics.ReservationConflicts.WithLabelValues("unit", "unavailable").Inc()
 			return nil, ErrUnitUnavailable
 		case errors.Is(err, ErrIncidentNotFound):
 			return nil, incident.ErrIncidentNotFound
 		case errors.Is(err, ErrIncidentNotDispatchable):
 			return nil, ErrIncidentNotDispatchable
 		case errors.Is(err, ErrReservationConflict):
+			metrics.ReservationConflicts.WithLabelValues("unit", "cas_retries_exhausted").Inc()
 			return nil, ErrReservationConflict
 		default:
 			return nil, err
@@ -167,6 +171,8 @@ const (
 // answer is then merely stale rather than absent. A position cache being down must
 // degrade dispatch, never stop it.
 func (s *DispatchService) Candidates(ctx context.Context, incidentID, preferredType string, limit int) (*incident.Incident, []scoring.ScoredUnit, string, error) {
+	start := time.Now()
+
 	inc, err := s.incidents.GetByID(ctx, incidentID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -197,6 +203,10 @@ func (s *DispatchService) Candidates(ctx context.Context, incidentID, preferredT
 	}
 	// Stable sort by score descending: ties keep the incoming (nearest-first) order.
 	sort.SliceStable(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
+
+	// Timed here rather than in the handler so the measurement covers the actual
+	// decision — geospatial query plus scoring — and not HTTP serialization.
+	metrics.DispatchDecision.WithLabelValues(source).Observe(time.Since(start).Seconds())
 
 	return inc, scored, source, nil
 }

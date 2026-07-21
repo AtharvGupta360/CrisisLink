@@ -9,6 +9,7 @@ import (
 
 	"github.com/AtharvGupta360/CrisisLink/internal/outbox"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/dbx"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/metrics"
 )
 
 // Booking outcomes. Each names a distinct reason a seat claim was refused, so the
@@ -197,8 +198,10 @@ func (r *TransportRepository) BookSeats(ctx context.Context, transportID, incide
 			return nil, nil, e
 		}
 		if status != StatusAvailable {
+			metrics.ReservationConflicts.WithLabelValues("transport", "unavailable").Inc()
 			return nil, nil, ErrTransportUnavailable
 		}
+		metrics.ReservationConflicts.WithLabelValues("transport", "no_seats").Inc()
 		return nil, nil, ErrInsufficientSeats
 	}
 

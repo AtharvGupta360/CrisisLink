@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/auth"
@@ -47,6 +48,9 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 	r.Use(
 		middleware.CORS(&cfg.CORS),
 		middleware.RequestID(),
+		// Early, so the timer spans every middleware below it: latency the client
+		// feels includes time spent being rate-limited or rejected.
+		middleware.Metrics(),
 		// Rate limit state lives in REDIS, not in this process's memory, so the
 		// limit holds across every API replica (an in-process map would give each
 		// replica its own private budget). Token bucket, evaluated atomically.
@@ -57,6 +61,13 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 		middleware.Recovery(),
 		middleware.RequestLogger(),
 	)
+
+	// Prometheus scrape endpoint. Mounted on the ROOT router, deliberately OUTSIDE
+	// the /api/v1 group: the scraper has no JWT and must not be rate-limited, and a
+	// limiter that throttles your monitoring is how you go blind during exactly the
+	// incident you need visibility for. In production this port is reached only
+	// from inside the cluster network, not published to the internet.
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Liveness: is the process up? No dependencies checked.
 	r.GET("/health", func(c *gin.Context) {
@@ -122,6 +133,11 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 	transportRepo := transport.NewTransportRepository(pool, outboxRepo)
 	transportService := transport.NewTransportService(transportRepo)
 	transportHandler := transport.NewTransportHandler(transportService)
+
+	// Publish the outbox backlog as a gauge. Runs for the life of the process; the
+	// API reports it (not just the relay) so the number is still visible when the
+	// relay itself is the thing that died.
+	go outboxRepo.MonitorLag(context.Background())
 
 	outboxService := outbox.NewOutboxService(outboxRepo)
 	outboxHandler := outbox.NewOutboxHandler(outboxService)

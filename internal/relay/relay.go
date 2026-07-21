@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/outbox"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/metrics"
 )
 
 // Publisher sends one serialized event to the broker. Abstracted so the relay is
@@ -76,6 +77,10 @@ func (r *Relay) drain(ctx context.Context) {
 			r.log.Errorw("relay batch failed", "error", err)
 			return
 		}
+		metrics.RelayPublished.Add(float64(res.Published))
+		metrics.RelayFailures.Add(float64(res.Failed))
+		metrics.RelayDeadLettered.Add(float64(res.DeadLettered))
+
 		if res.Published > 0 {
 			r.log.Infof("relay published %d event(s)", res.Published)
 		}

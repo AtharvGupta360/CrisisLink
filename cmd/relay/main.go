@@ -51,6 +51,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// The relay is its own process, so it needs its own scrape target — Prometheus
+	// cannot see these counters through the API's endpoint. Started after ctx exists
+	// so it shuts down with everything else.
+	go relay.ServeMetrics(ctx, ":9101", common.Logger)
+
 	common.Logger.Infof("outbox relay starting (topic=%s brokers=%v)", cfg.Kafka.Topic, cfg.Kafka.Brokers)
 	if err := r.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		common.Logger.Fatalf("relay: %v", err)

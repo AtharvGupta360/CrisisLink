@@ -9,6 +9,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/metrics"
 )
 
 // tokenBucketScript is a TOKEN BUCKET evaluated atomically inside Redis.
@@ -98,6 +99,7 @@ func RedisRateLimiter(rdb *redis.Client, cfg RedisRateLimiterConfig) gin.Handler
 		if allowed == 0 {
 			// Tell the client roughly how long until one token is back.
 			c.Header("Retry-After", strconv.Itoa(int(1/cfg.RequestsPerSecond)+1))
+			metrics.RateLimited.Inc()
 			common.Error(c, http.StatusTooManyRequests, "rate limit exceeded", "RATE_LIMITED")
 			c.Abort()
 			return

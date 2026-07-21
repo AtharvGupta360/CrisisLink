@@ -32,11 +32,13 @@ import (
 	"context"
 	"encoding/json"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/metrics"
 )
 
 // Cache is a thin JSON codec over Redis.
@@ -61,6 +63,7 @@ func New(rdb *redis.Client) *Cache {
 func (c *Cache) GetJSON(ctx context.Context, key string, dst any) bool {
 	raw, err := c.rdb.Get(ctx, key).Bytes()
 	if err != nil {
+		metrics.CacheOps.WithLabelValues(cacheName(key), "miss").Inc()
 		// redis.Nil is the ordinary "key absent" miss, not a fault — don't log it.
 		if err != redis.Nil {
 			common.Logger.Warnw("cache read failed, falling through to postgres", "key", key, "error", err)
@@ -73,9 +76,21 @@ func (c *Cache) GetJSON(ctx context.Context, key string, dst any) bool {
 		// Evict it and treat it as a miss; the next read rebuilds it correctly.
 		common.Logger.Warnw("cache decode failed, evicting entry", "key", key, "error", err)
 		c.Del(ctx, key)
+		metrics.CacheOps.WithLabelValues(cacheName(key), "miss").Inc()
 		return false
 	}
+	metrics.CacheOps.WithLabelValues(cacheName(key), "hit").Inc()
 	return true
+}
+
+// cacheName derives a LOW-CARDINALITY label from a key. "shelter:v1:<uuid>"
+// becomes "shelter" — labelling by the full key would create one time series per
+// cached entity, which is the cardinality explosion that kills Prometheus.
+func cacheName(key string) string {
+	if i := strings.IndexByte(key, ':'); i > 0 {
+		return key[:i]
+	}
+	return "unknown"
 }
 
 // SetJSON backfills a key with a JITTERED TTL.

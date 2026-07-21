@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/dbx"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/metrics"
 )
 
 type ShelterRepository struct {
@@ -127,8 +128,10 @@ func (r *ShelterRepository) AdmitTx(ctx context.Context, tx pgx.Tx, shelterID st
 		return e
 	}
 	if status != ShelterOpen {
+		metrics.ReservationConflicts.WithLabelValues("shelter_bed", "closed").Inc()
 		return ErrShelterClosed
 	}
+	metrics.ReservationConflicts.WithLabelValues("shelter_bed", "full").Inc()
 	return ErrShelterFull
 }
 
