@@ -41,7 +41,7 @@ func (h *DispatchHandler) Candidates(c *gin.Context) {
 		return
 	}
 
-	inc, candidates, err := h.svc.Candidates(c.Request.Context(), c.Param("id"), preferredType, limit)
+	inc, candidates, positionSource, err := h.svc.Candidates(c.Request.Context(), c.Param("id"), preferredType, limit)
 	if err != nil {
 		if errors.Is(err, incident.ErrIncidentNotFound) {
 			common.Error(c, http.StatusNotFound, "incident not found", "NOT_FOUND")
@@ -53,6 +53,10 @@ func (h *DispatchHandler) Candidates(c *gin.Context) {
 	common.Success(c, http.StatusOK, "dispatch candidates", gin.H{
 		"incident":   inc,
 		"candidates": candidates,
+		// Surfaced deliberately: "live" means distances came from real heartbeat
+		// positions, "registry" means we fell back to registration pins and the
+		// ranking may be stale. An explainable engine says which it used.
+		"positionSource": positionSource,
 	})
 }
 

@@ -30,6 +30,17 @@ const (
 	// SLOWER to notice a genuine death. 3x is the usual compromise between false
 	// positives and detection latency.
 	TTL = 3 * HeartbeatInterval
+
+	// geoKey is the sorted set holding every unit's last reported position, indexed
+	// by geohash so Redis can answer "who is near here" as a range scan.
+	//
+	// IMPORTANT ASYMMETRY: sorted-set MEMBERS cannot carry their own TTL. The
+	// per-unit presence keys expire themselves; entries in this set do NOT. So this
+	// set is an INDEX, not a source of truth — it will contain units that have long
+	// gone dark, still sitting at their last position. Liveness is always decided by
+	// the presence keys, and NearbyLive filters against them on every read (and
+	// lazily evicts what it finds stale).
+	geoKey = "presence:geo"
 )
 
 // Service is the presence API over Redis. It holds no Postgres handle at all —
@@ -63,9 +74,115 @@ func (s *Service) Heartbeat(ctx context.Context, unitID string, lat, lng float64
 	if err != nil {
 		return err
 	}
-	// SET with an expiry (not SET + separate EXPIRE) so the write and its lifetime
-	// are one atomic command — there is no window where the key exists forever.
-	return s.rdb.Set(ctx, key(unitID), raw, TTL).Err()
+
+	// Two writes, ONE round trip. The pipeline is not for atomicity (these are
+	// independent and a partial apply is harmless) — it is to keep the hottest
+	// endpoint in the system at a single network hop.
+	//
+	//   SET  ... EX TTL  -> liveness, expires itself
+	//   GEOADD           -> spatial index, does NOT expire (see geoKey)
+	//
+	// SET carries its expiry in the same command rather than a separate EXPIRE, so
+	// there is never a window where the key exists without a lifetime.
+	pipe := s.rdb.Pipeline()
+	pipe.Set(ctx, key(unitID), raw, TTL)
+	pipe.GeoAdd(ctx, geoKey, &redis.GeoLocation{
+		Name:      unitID,
+		Longitude: lng, // longitude FIRST — the classic geospatial footgun
+		Latitude:  lat,
+	})
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+// NearbyUnit is one live unit found near a point, with its CURRENT distance.
+type NearbyUnit struct {
+	UnitID         string  `json:"unitId"`
+	Latitude       float64 `json:"latitude"`
+	Longitude      float64 `json:"longitude"`
+	DistanceMeters float64 `json:"distanceMeters"`
+}
+
+// NearbyLive answers "which units are physically near this point RIGHT NOW",
+// nearest first, using live heartbeat positions rather than registration pins.
+//
+// Two stages, and the second is the point:
+//
+//  1. GEOSEARCH the index for candidates within the radius.
+//  2. Cross-check each against its presence key and DROP the dark ones — because
+//     the index keeps members forever, it will confidently return units that
+//     stopped reporting hours ago. The TTL keys are the authority on liveness.
+//
+// Dark members found in step 2 are lazily ZREM'd. Without that the set grows
+// without bound as units churn; with it, cleanup is paid for by the reads that
+// actually notice the garbage, and needs no reaper job.
+//
+// It over-fetches (2x limit) so that dropping dark members does not leave us short
+// of the caller's requested count.
+func (s *Service) NearbyLive(ctx context.Context, lat, lng, radiusMeters float64, limit int) ([]NearbyUnit, error) {
+	if err := geo.ValidateLatLng(lat, lng); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+
+	locs, err := s.rdb.GeoSearchLocation(ctx, geoKey, &redis.GeoSearchLocationQuery{
+		GeoSearchQuery: redis.GeoSearchQuery{
+			Longitude:  lng,
+			Latitude:   lat,
+			Radius:     radiusMeters,
+			RadiusUnit: "m",
+			Sort:       "ASC", // nearest first
+			Count:      limit * 2,
+		},
+		WithCoord: true,
+		WithDist:  true,
+	}).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(locs) == 0 {
+		return []NearbyUnit{}, nil
+	}
+
+	ids := make([]string, len(locs))
+	for i, l := range locs {
+		ids[i] = l.Name
+	}
+	live := s.FilterPresent(ctx, ids)
+
+	out := make([]NearbyUnit, 0, limit)
+	var stale []string
+	for _, l := range locs {
+		if !live[l.Name] {
+			stale = append(stale, l.Name)
+			continue
+		}
+		if len(out) < limit {
+			out = append(out, NearbyUnit{
+				UnitID:         l.Name,
+				Latitude:       l.Latitude,
+				Longitude:      l.Longitude,
+				DistanceMeters: l.Dist, // metres, because RadiusUnit was "m"
+			})
+		}
+	}
+	if len(stale) > 0 {
+		// Best-effort: a failed cleanup only means we re-notice them next time.
+		if err := s.rdb.ZRem(ctx, geoKey, toAny(stale)...).Err(); err != nil {
+			common.Logger.Warnw("could not evict dark units from geo index", "error", err)
+		}
+	}
+	return out, nil
+}
+
+func toAny(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }
 
 // Get returns a unit's last known presence. found=false means the key expired (or

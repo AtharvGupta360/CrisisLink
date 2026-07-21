@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/incident"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
+	"github.com/AtharvGupta360/CrisisLink/internal/presence"
 	"github.com/AtharvGupta360/CrisisLink/internal/scoring"
 	"github.com/AtharvGupta360/CrisisLink/internal/unit"
 )
@@ -34,14 +36,32 @@ const (
 // DispatchService coordinates incidents, units, and dispatches. It grows across
 // the dispatch phases: P11 candidate search, P12 scoring, P13 the reservation
 // transaction (below). It spans three aggregates.
+// LiveLocator is the presence SEAM. Dispatch wants to rank units by where they
+// ACTUALLY are, not where they were registered, but it must not know that live
+// positions happen to live in a Redis sorted set.
+//
+// Note this seam takes no pgx.Tx: presence is not part of the reservation
+// transaction and must never be. It informs the CHOICE of unit; the reservation
+// itself is still decided entirely by Postgres, because Redis cannot be rolled back
+// and cannot be trusted to enforce an invariant.
+type LiveLocator interface {
+	NearbyLive(ctx context.Context, lat, lng, radiusMeters float64, limit int) ([]presence.NearbyUnit, error)
+}
+
+// liveSearchRadiusMeters bounds the GEO lookup. Wide enough to cover a city-scale
+// response, narrow enough that a far-flung unit is not proposed for a local
+// incident. Units beyond it fall to the registry path.
+const liveSearchRadiusMeters = 20000
+
 type DispatchService struct {
 	incidents  *incident.IncidentRepository
 	units      *unit.UnitRepository
 	dispatches *DispatchRepository
+	live       LiveLocator
 }
 
-func NewDispatchService(incidents *incident.IncidentRepository, units *unit.UnitRepository, dispatches *DispatchRepository) *DispatchService {
-	return &DispatchService{incidents: incidents, units: units, dispatches: dispatches}
+func NewDispatchService(incidents *incident.IncidentRepository, units *unit.UnitRepository, dispatches *DispatchRepository, live LiveLocator) *DispatchService {
+	return &DispatchService{incidents: incidents, units: units, dispatches: dispatches, live: live}
 }
 
 // Reserve assigns a specific unit to an incident via the no-double-booking
@@ -123,23 +143,45 @@ func (s *DispatchService) AdvanceStatus(ctx context.Context, dispatchID, newStat
 // Two-stage design on purpose: the DB does the cheap geometric shortlisting (KNN
 // picks the k nearest via the spatial index), then the pure scoring function ranks
 // that small set in Go. We never score the whole fleet — only the shortlist.
-func (s *DispatchService) Candidates(ctx context.Context, incidentID, preferredType string, limit int) (*incident.Incident, []scoring.ScoredUnit, error) {
+// PositionSource records WHERE the distances in a candidate list came from. It is
+// returned to the caller because an "explainable" dispatch engine must not quietly
+// switch between live and stale data — the operator deserves to know which they are
+// looking at.
+const (
+	PositionSourceLive     = "live"     // Redis GEO: real heartbeat positions
+	PositionSourceRegistry = "registry" // PostGIS KNN: registration pins, possibly stale
+)
+
+// Candidates returns the incident plus scored, ranked units to dispatch.
+//
+// HYBRID SEARCH. Two stores hold positions and neither is sufficient alone:
+//
+//   - Redis GEO has LIVE positions but no attributes (status, type) and is
+//     ephemeral — after a restart it is empty.
+//   - PostGIS has attributes and durability but only the REGISTRATION pin, so a
+//     unit that has driven across town still looks like it never moved.
+//
+// So: ask Redis who is physically near right now, hydrate those ids from Postgres
+// (which enforces status='available'), and rank by the LIVE distance. If Redis is
+// empty, errors, or nothing live is in range, FALL BACK to the PostGIS KNN — the
+// answer is then merely stale rather than absent. A position cache being down must
+// degrade dispatch, never stop it.
+func (s *DispatchService) Candidates(ctx context.Context, incidentID, preferredType string, limit int) (*incident.Incident, []scoring.ScoredUnit, string, error) {
 	inc, err := s.incidents.GetByID(ctx, incidentID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil, incident.ErrIncidentNotFound
+			return nil, nil, "", incident.ErrIncidentNotFound
 		}
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
 	if limit <= 0 || limit > 50 {
 		limit = 5
 	}
-	// KNN shortlist stays type-agnostic: we still want the nearest AVAILABLE units
-	// regardless of type, then let scoring decide how much the type gap costs.
-	units, err := s.units.FindNearestAvailable(ctx, inc.Latitude, inc.Longitude, "", limit)
+
+	units, source, err := s.candidateUnits(ctx, inc, limit)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
 	scored := make([]scoring.ScoredUnit, 0, len(units))
@@ -147,8 +189,73 @@ func (s *DispatchService) Candidates(ctx context.Context, incidentID, preferredT
 		score, bd := scoring.Score(&units[i], preferredType)
 		scored = append(scored, scoring.ScoredUnit{Unit: units[i], Score: score, Breakdown: bd})
 	}
-	// Stable sort by score descending: ties keep KNN (nearest-first) order.
+	// Stable sort by score descending: ties keep the incoming (nearest-first) order.
 	sort.SliceStable(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
 
-	return inc, scored, nil
+	return inc, scored, source, nil
+}
+
+// candidateUnits runs the live path, falling back to the registry path.
+func (s *DispatchService) candidateUnits(ctx context.Context, inc *incident.Incident, limit int) ([]unit.Unit, string, error) {
+	if s.live != nil {
+		// Over-fetch: some live units will be busy and get filtered out by the
+		// availability check below, so asking for exactly `limit` would come up short.
+		nearby, err := s.live.NearbyLive(ctx, inc.Latitude, inc.Longitude, liveSearchRadiusMeters, limit*3)
+		if err != nil {
+			common.Logger.Warnw("live position lookup failed, falling back to registry positions",
+				"incidentId", inc.ID, "error", err)
+		} else if len(nearby) > 0 {
+			if units, ok := s.hydrateLive(ctx, nearby, limit); ok {
+				return units, PositionSourceLive, nil
+			}
+		}
+	}
+
+	// Fallback: nearest available by registration pin (the P11 KNN).
+	units, err := s.units.FindNearestAvailable(ctx, inc.Latitude, inc.Longitude, "", limit)
+	if err != nil {
+		return nil, "", err
+	}
+	return units, PositionSourceRegistry, nil
+}
+
+// hydrateLive turns live GEO hits into full units, keeping Redis's distance and
+// ordering. Reports false when nothing usable survived, so the caller can fall back.
+func (s *DispatchService) hydrateLive(ctx context.Context, nearby []presence.NearbyUnit, limit int) ([]unit.Unit, bool) {
+	ids := make([]string, len(nearby))
+	for i, n := range nearby {
+		ids[i] = n.UnitID
+	}
+	rows, err := s.units.FindAvailableByIDs(ctx, ids)
+	if err != nil {
+		common.Logger.Warnw("could not hydrate live candidates, falling back", "error", err)
+		return nil, false
+	}
+	if len(rows) == 0 {
+		return nil, false // everyone nearby is busy; let the registry path try wider
+	}
+
+	byID := make(map[string]unit.Unit, len(rows))
+	for _, u := range rows {
+		byID[u.ID] = u
+	}
+
+	// Walk `nearby` (already nearest-first from Redis) so live ordering is preserved,
+	// and overwrite the position with the LIVE one — otherwise scoring would rank on
+	// the stale registration distance and the whole exercise would be pointless.
+	out := make([]unit.Unit, 0, limit)
+	for _, n := range nearby {
+		u, ok := byID[n.UnitID]
+		if !ok {
+			continue // not available
+		}
+		u.Latitude = n.Latitude
+		u.Longitude = n.Longitude
+		u.DistanceMeters = n.DistanceMeters
+		out = append(out, u)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, len(out) > 0
 }

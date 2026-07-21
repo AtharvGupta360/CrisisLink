@@ -3,6 +3,7 @@ package presence
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -79,4 +80,35 @@ func (h *Handler) GetPresence(c *gin.Context) {
 		return
 	}
 	common.Success(c, http.StatusOK, "unit is present", p)
+}
+
+// NearbyLive handles GET /units/nearby?lat=&lng=&radius=&limit= — which units are
+// physically near this point RIGHT NOW, by live heartbeat position.
+//
+// This is the question PostGIS cannot answer well: its units.location is the
+// registration pin, so a unit that has driven across the city still appears where
+// it started. Here the positions are seconds old.
+func (h *Handler) NearbyLive(c *gin.Context) {
+	lat, errLat := strconv.ParseFloat(c.Query("lat"), 64)
+	lng, errLng := strconv.ParseFloat(c.Query("lng"), 64)
+	if errLat != nil || errLng != nil {
+		common.Error(c, http.StatusBadRequest, "lat and lng are required", "VALIDATION_ERROR")
+		return
+	}
+	radius := float64(common.ClampInt(c.Query("radius"), 5000, 1, 100000))
+	limit := common.ClampInt(c.Query("limit"), 5, 1, 50)
+
+	units, err := h.svc.NearbyLive(c.Request.Context(), lat, lng, radius, limit)
+	if err != nil {
+		if errors.Is(err, geo.ErrInvalidCoordinates) {
+			common.Error(c, http.StatusBadRequest, "coordinates out of range", "VALIDATION_ERROR")
+			return
+		}
+		common.Error(c, http.StatusServiceUnavailable, "presence store unavailable", "PRESENCE_UNAVAILABLE")
+		return
+	}
+	common.Success(c, http.StatusOK, "live units nearby", gin.H{
+		"count": len(units),
+		"units": units,
+	})
 }

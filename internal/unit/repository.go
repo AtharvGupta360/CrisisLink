@@ -77,6 +77,39 @@ func (r *UnitRepository) MarkReservedCASTx(ctx context.Context, tx pgx.Tx, unitI
 	return ct.RowsAffected() > 0, nil
 }
 
+// FindAvailableByIDs hydrates a set of unit ids, keeping only the AVAILABLE ones.
+//
+// This is the second half of the hybrid candidate search: Redis GEO decides WHO is
+// physically near (using live heartbeat positions), then this fills in the
+// attributes Redis does not store — call sign, type, status — and enforces
+// availability. Redis is a position index; Postgres remains the source of truth for
+// what a unit actually is and whether it can be dispatched.
+//
+// Order is not meaningful here; the caller re-orders by live distance.
+func (r *UnitRepository) FindAvailableByIDs(ctx context.Context, ids []string) ([]Unit, error) {
+	if len(ids) == 0 {
+		return []Unit{}, nil
+	}
+	const q = `SELECT ` + unitColumns + `
+		FROM units
+		WHERE id = ANY($1::uuid[]) AND status = 'available'`
+	rows, err := r.pool.Query(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Unit, 0, len(ids))
+	for rows.Next() {
+		var u Unit
+		if err := scanUnit(rows, &u); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 // SetStatusTx moves a unit to an arbitrary status, used as a dispatch advances
 // through its lifecycle (and to free the unit when it terminates).
 func (r *UnitRepository) SetStatusTx(ctx context.Context, tx pgx.Tx, unitID, status string) error {

@@ -100,7 +100,7 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 	outboxRepo := outbox.NewOutboxRepository(pool)
 
 	dispatchRepo := dispatch.NewDispatchRepository(pool, unitRepo, incidentRepo, outboxRepo)
-	dispatchService := dispatch.NewDispatchService(incidentRepo, unitRepo, dispatchRepo)
+	dispatchService := dispatch.NewDispatchService(incidentRepo, unitRepo, dispatchRepo, presenceService)
 	dispatchHandler := dispatch.NewDispatchHandler(dispatchService)
 
 	// ONE shared ShelterCache, injected into every service that reads or writes a
@@ -164,6 +164,8 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 
 		// Rescue units — reads for any authenticated user, writes admin-only
 		// (per-route AdminRequired runs after the group's AuthRequired).
+		// static route registered before /units/:id so it is not captured as an id
+		protected.GET("/units/nearby", presenceHandler.NearbyLive)
 		protected.GET("/units", unitHandler.List)
 		protected.GET("/units/:id", unitHandler.GetByID)
 		protected.POST("/units", middleware.AdminRequired(), unitHandler.Create)
