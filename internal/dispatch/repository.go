@@ -83,6 +83,7 @@ type IncidentTracker interface {
 	StatusTx(ctx context.Context, tx pgx.Tx, id string) (string, error)
 	MarkDispatchedTx(ctx context.Context, tx pgx.Tx, id string) error
 	ResolveIfDispatchedTx(ctx context.Context, tx pgx.Tx, id string) error
+	RevertToVerifiedTx(ctx context.Context, tx pgx.Tx, id string) error
 }
 
 type DispatchRepository struct {

@@ -194,3 +194,17 @@ func (r *IncidentRepository) TryDedupe(ctx context.Context, lat, lng, radiusMete
 	}
 	return &inc, nil
 }
+
+// RevertToVerifiedTx sends an incident back to 'verified' when it has lost its last
+// active dispatch — as happens when its unit is preempted by a more urgent call.
+//
+// Guarded on 'dispatched' so a resolved or cancelled incident is never resurrected.
+// Like ResolveIfDispatchedTx this is a CASCADE, driven by dispatch lifecycle rather
+// than by an operator, so it bypasses the app-level state machine and enforces its
+// own precondition in SQL — the guard IS the check, applied atomically.
+func (r *IncidentRepository) RevertToVerifiedTx(ctx context.Context, tx pgx.Tx, id string) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE incidents SET status = 'verified', updated_at = now()
+		 WHERE id = $1::uuid AND status = 'dispatched'`, id)
+	return err
+}

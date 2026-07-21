@@ -14,7 +14,6 @@ import (
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 
-	"github.com/AtharvGupta360/CrisisLink/internal/notification"
 	"github.com/AtharvGupta360/CrisisLink/internal/outbox"
 )
 
@@ -31,15 +30,25 @@ type Publisher interface {
 }
 
 // Consumer reads the event topic as part of a Kafka consumer group.
+// SideEffect turns a decoded event into the work this consumer should do, as a
+// TxFunc that MUST run inside the inbox's transaction.
+//
+// Injecting it is what lets one implementation serve several consumer groups: the
+// notifier and the auditor differ only in this function. Everything else — offset
+// handling, dedup, retries, dead-lettering — is identical and should not be
+// duplicated per consumer.
+type SideEffect func(outbox.EventEnvelope) outbox.TxFunc
+
 type Consumer struct {
 	reader *kafka.Reader
 	inbox  *outbox.InboxRepository
 	dlq    Publisher // where poison / repeatedly-failing messages go
 	name   string    // scopes the dedup ledger: (consumer, event_id)
+	effect SideEffect
 	log    *zap.SugaredLogger
 }
 
-func New(brokers []string, topic, groupID string, inbox *outbox.InboxRepository, dlq Publisher, log *zap.SugaredLogger) *Consumer {
+func New(brokers []string, topic, groupID string, inbox *outbox.InboxRepository, dlq Publisher, effect SideEffect, log *zap.SugaredLogger) *Consumer {
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:  brokers,
 		Topic:    topic,
@@ -47,7 +56,7 @@ func New(brokers []string, topic, groupID string, inbox *outbox.InboxRepository,
 		MinBytes: 1,
 		MaxBytes: 10e6,
 	})
-	return &Consumer{reader: r, inbox: inbox, dlq: dlq, name: groupID, log: log}
+	return &Consumer{reader: r, inbox: inbox, dlq: dlq, name: groupID, effect: effect, log: log}
 }
 
 func (c *Consumer) Close() error { return c.reader.Close() }
@@ -90,10 +99,11 @@ func (c *Consumer) process(ctx context.Context, m kafka.Message) {
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// The dedup marker + the notification commit together (see InboxRepository).
-		processed, err := c.inbox.ProcessOnce(ctx, c.name, e.ID,
-			notification.NotificationWriter(e.ID, e.EventType, notificationMessage(e)),
-		)
+		// The dedup marker + this consumer's side effect commit together (see
+		// InboxRepository). The ledger is keyed by (consumer, event_id), so each
+		// group dedups independently — the auditor seeing an event does not stop the
+		// notifier from seeing it too.
+		processed, err := c.inbox.ProcessOnce(ctx, c.name, e.ID, c.effect(e))
 		if err == nil {
 			if processed {
 				c.log.Infof("processed event id=%d type=%s", e.ID, e.EventType)
@@ -134,7 +144,10 @@ func (c *Consumer) deadLetter(ctx context.Context, m kafka.Message, reason strin
 	c.log.Warnw("event DEAD-LETTERED", "reason", reason, "offset", m.Offset)
 }
 
-func notificationMessage(e outbox.EventEnvelope) string {
+// NotificationMessage renders a human-readable line for an event. Exported so the
+// composition root can pair it with the notification writer without this package
+// needing to know which side effect a given consumer group runs.
+func NotificationMessage(e outbox.EventEnvelope) string {
 	switch e.EventType {
 	case outbox.EventDispatchCreated:
 		return fmt.Sprintf("Unit dispatched (dispatch %s)", e.AggregateID)

@@ -20,6 +20,12 @@ const (
 	EventVictimAssigned    = "victim.assigned"
 	EventTransportBooked   = "transport.booked"
 	EventTransportReleased = "transport.released"
+
+	// Reassignment events. Both end one dispatch and begin another, but for
+	// different reasons, and downstream consumers care about the difference:
+	// rerouted = the UNIT failed us; preempted = a more urgent incident took it.
+	EventDispatchRerouted  = "dispatch.rerouted"
+	EventDispatchPreempted = "dispatch.preempted"
 )
 
 // OutboxEvent is one row of the transactional outbox. It is written in the same

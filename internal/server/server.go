@@ -18,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/AtharvGupta360/CrisisLink/internal/audit"
 	"github.com/AtharvGupta360/CrisisLink/internal/auth"
 	"github.com/AtharvGupta360/CrisisLink/internal/dispatch"
 	"github.com/AtharvGupta360/CrisisLink/internal/incident"
@@ -146,6 +147,9 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 	outboxService := outbox.NewOutboxService(outboxRepo)
 	outboxHandler := outbox.NewOutboxHandler(outboxService)
 
+	auditRepo := audit.NewRepository(pool)
+	auditHandler := audit.NewHandler(auditRepo)
+
 	notificationRepo := notification.NewNotificationRepository(pool)
 	notificationService := notification.NewNotificationService(notificationRepo)
 	notificationHandler := notification.NewNotificationHandler(notificationService)
@@ -186,6 +190,16 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 		// Dispatch lifecycle (P15). Reads for any authenticated user; advancing the
 		// state machine is admin-only (it mutates unit + incident state).
 		protected.GET("/dispatches/:id", dispatchHandler.Get)
+
+		// Reassignment. Both END one dispatch and BEGIN another atomically, and both
+		// are coordination decisions, so they are operator/admin only — a responder
+		// cannot reroute their own job away or seize someone else's unit.
+		protected.POST("/dispatches/:id/reroute",
+			middleware.RequireRole(authz.RoleOperator, authz.RoleAdmin), dispatchHandler.Reroute)
+		protected.GET("/incidents/:id/preemptable",
+			middleware.RequireRole(authz.RoleOperator, authz.RoleAdmin), dispatchHandler.Preemptable)
+		protected.POST("/incidents/:id/preempt",
+			middleware.RequireRole(authz.RoleOperator, authz.RoleAdmin), dispatchHandler.Preempt)
 		protected.PATCH("/dispatches/:id/status", middleware.RequireRole(authz.RoleResponder, authz.RoleOperator, authz.RoleAdmin), dispatchHandler.AdvanceStatus)
 
 		// Rescue units — reads for any authenticated user, writes admin-only
@@ -259,6 +273,8 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 			// What the idempotent consumer produced (P21) — exactly one per event,
 			// even if Kafka delivered it twice.
 			admin.GET("/notifications", notificationHandler.List)
+			// The audit trail: append-only, built by its own consumer group.
+			admin.GET("/audit", auditHandler.List)
 		}
 	}
 

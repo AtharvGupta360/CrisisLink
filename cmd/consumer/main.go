@@ -10,9 +10,12 @@ import (
 	"errors"
 	"log"
 	"os/signal"
+	"sync"
 	"syscall"
 
+	"github.com/AtharvGupta360/CrisisLink/internal/audit"
 	"github.com/AtharvGupta360/CrisisLink/internal/consumer"
+	"github.com/AtharvGupta360/CrisisLink/internal/notification"
 	"github.com/AtharvGupta360/CrisisLink/internal/outbox"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/config"
@@ -20,8 +23,14 @@ import (
 	"github.com/AtharvGupta360/CrisisLink/internal/relay"
 )
 
-// consumerGroup names both the Kafka consumer group and the dedup ledger scope.
-const consumerGroup = "crisislink-notifier"
+// Consumer group names. Each names both a Kafka consumer group AND the dedup
+// ledger scope in processed_events, so the two groups process every event
+// independently: the auditor recording an event does not stop the notifier from
+// also recording it, and either can be replayed alone.
+const (
+	notifierGroup = "crisislink-notifier"
+	auditorGroup  = "crisislink-auditor"
+)
 
 func main() {
 	cfg, err := config.LoadConfig(".")
@@ -52,15 +61,39 @@ func main() {
 	dlq := relay.NewKafkaPublisher(cfg.Kafka.Brokers, cfg.Kafka.DLQTopic)
 	defer dlq.Close()
 
-	c := consumer.New(cfg.Kafka.Brokers, cfg.Kafka.Topic, consumerGroup, inbox, dlq, common.Logger)
-	defer c.Close()
+	// TWO consumer groups over the SAME topic. Kafka groups are independent
+	// subscriptions — each gets its own copy of every message and its own offsets —
+	// so adding the auditor is purely additive and cannot slow the notifier down.
+	notifier := consumer.New(cfg.Kafka.Brokers, cfg.Kafka.Topic, notifierGroup, inbox, dlq,
+		func(e outbox.EventEnvelope) outbox.TxFunc {
+			return notification.NotificationWriter(e.ID, e.EventType, consumer.NotificationMessage(e))
+		}, common.Logger)
+	defer notifier.Close()
+
+	auditor := consumer.New(cfg.Kafka.Brokers, cfg.Kafka.Topic, auditorGroup, inbox, dlq,
+		audit.Writer, common.Logger)
+	defer auditor.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	common.Logger.Infof("consumer starting (topic=%s group=%s)", cfg.Kafka.Topic, consumerGroup)
-	if err := c.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		common.Logger.Errorf("consumer: %v", err)
+	common.Logger.Infof("consumers starting (topic=%s groups=[%s %s])",
+		cfg.Kafka.Topic, notifierGroup, auditorGroup)
+
+	// Run both groups concurrently. WaitGroup, not a bare `go`, so shutdown waits
+	// for each to finish its in-flight message and commit its offset — otherwise a
+	// SIGTERM could drop work that would then be redelivered (correct, thanks to the
+	// dedup ledger, but needlessly noisy).
+	var wg sync.WaitGroup
+	for _, c := range []*consumer.Consumer{notifier, auditor} {
+		wg.Add(1)
+		go func(c *consumer.Consumer) {
+			defer wg.Done()
+			if err := c.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				common.Logger.Errorf("consumer: %v", err)
+			}
+		}(c)
 	}
+	wg.Wait()
 	common.Logger.Info("consumer stopped")
 }
