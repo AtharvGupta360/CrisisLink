@@ -103,6 +103,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 	presenceService := presence.NewService(rdb)
 	presenceHandler := presence.NewHandler(presenceService)
 
+	// Publish the live-fleet size as a gauge. Counted from Redis, not tracked in
+	// memory, because presence keys expire without telling anyone.
+	go presenceService.MonitorFleet(context.Background())
+
 	unitRepo := unit.NewUnitRepository(pool)
 	unitService := unit.NewUnitService(unitRepo)
 	unitHandler := unit.NewUnitHandler(unitService)

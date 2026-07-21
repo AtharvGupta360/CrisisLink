@@ -11,6 +11,19 @@
 // endpoint on its own schedule. That is why a crashed app simply goes missing from
 // the graph rather than losing data it was trying to push.
 //
+// A CONSEQUENCE OF DECLARING THEM ALL HERE, worth knowing: promauto registers every
+// metric in this package at INIT time, so ANY process that imports it (directly or
+// transitively) exports ALL of them — including ones it never sets. The relay
+// therefore publishes crisislink_rate_limited_total = 0, and the API publishes
+// crisislink_relay_published_total = 0. Those phantom zeros are harmless on their
+// own but pollute a graph and quietly corrupt any sum() across jobs.
+//
+// The fix is at query time: every dashboard query carries a job selector
+// (`{job="crisislink-api"}`) so a metric is only ever read from the process that
+// actually owns it. The alternative — splitting this into per-process packages with
+// explicit registration — buys tidier /metrics output at the cost of losing the
+// single place where every metric name is defined. Naming things once matters more.
+//
 // The three metric types, and when each is correct:
 //
 //	COUNTER   only goes up (resets to 0 on restart). "How many X have happened."

@@ -1,0 +1,13 @@
+# Datasource provisioning: Grafana wires itself to Prometheus on boot instead of
+# someone clicking through the UI. Provisioned config is version-controlled and
+# reproducible — a dashboard that only exists in someone's browser is lost the
+# moment the volume is deleted.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy          # Grafana's backend queries Prometheus, not the browser
+    url: http://prometheus:9090   # compose service name, on the shared network
+    isDefault: true
+    editable: false        # changes belong in this file, not in the UI

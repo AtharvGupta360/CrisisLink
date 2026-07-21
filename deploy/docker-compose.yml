@@ -122,6 +122,11 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana
+      # Provisioned config: the datasource and dashboards are defined in files, not
+      # clicked into the UI. A dashboard that exists only in someone's browser is
+      # lost the moment the volume is deleted, and cannot be reviewed in a PR.
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
 

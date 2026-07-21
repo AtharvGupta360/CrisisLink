@@ -1,5 +1,5 @@
 # Prometheus scrape config. Prometheus PULLS metrics from targets on an interval
-# (it is not pushed to). Each `job` is a set of targets sharing a purpose.
+# (nothing is pushed to it). Each `job` is a set of targets sharing a purpose.
 global:
   scrape_interval: 15s        # how often to pull each target
   scrape_timeout: 10s
@@ -10,10 +10,25 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # The CrisisLink app. It runs on the HOST during dev, so from inside the
-  # Prometheus container we reach the host via Docker's special DNS name
-  # `host.docker.internal`. This target will show as DOWN until we expose
-  # /metrics in P25 — that's expected for now.
-  - job_name: crisislink
+  # The CrisisLink API. It runs on the HOST during development, so from inside the
+  # Prometheus container we reach it via Docker's special DNS name
+  # `host.docker.internal`. In a compose/k8s deployment this becomes the service
+  # name instead.
+  - job_name: crisislink-api
     static_configs:
       - targets: ["host.docker.internal:8080"]
+        labels:
+          component: api
+
+  # The relay is a SEPARATE PROCESS with its own in-memory counters, so it needs
+  # its own scrape target — Prometheus cannot reach them through the API. This is
+  # inherent to pull-based monitoring: every process holding metrics must be
+  # individually scrapeable.
+  #
+  # It shows DOWN whenever the relay is not running, which is itself useful: `up`
+  # is a metric, so "the relay is dead" is alertable without any extra work.
+  - job_name: crisislink-relay
+    static_configs:
+      - targets: ["host.docker.internal:9101"]
+        labels:
+          component: relay

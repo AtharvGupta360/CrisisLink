@@ -1,0 +1,13 @@
+# Dashboard provisioning: load every dashboard JSON from a folder on disk.
+apiVersion: 1
+
+providers:
+  - name: crisislink
+    orgId: 1
+    folder: CrisisLink
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10   # re-read the folder, so edits show up without a restart
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
