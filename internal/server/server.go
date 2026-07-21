@@ -25,6 +25,7 @@ import (
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/config"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/middleware"
+	"github.com/AtharvGupta360/CrisisLink/internal/presence"
 	"github.com/AtharvGupta360/CrisisLink/internal/shelter"
 	"github.com/AtharvGupta360/CrisisLink/internal/unit"
 	"github.com/AtharvGupta360/CrisisLink/internal/victim"
@@ -83,6 +84,11 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 	incidentRepo := incident.NewIncidentRepository(pool)
 	incidentService := incident.NewIncidentService(incidentRepo)
 	incidentHandler := incident.NewIncidentHandler(incidentService)
+
+	// Presence is Redis-only: no repository, no migration, nothing durable. It
+	// answers "is this unit reachable right now", which Postgres cannot.
+	presenceService := presence.NewService(rdb)
+	presenceHandler := presence.NewHandler(presenceService)
 
 	unitRepo := unit.NewUnitRepository(pool)
 	unitService := unit.NewUnitService(unitRepo)
@@ -162,6 +168,13 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 		protected.GET("/units/:id", unitHandler.GetByID)
 		protected.POST("/units", middleware.AdminRequired(), unitHandler.Create)
 		protected.PATCH("/units/:id/status", middleware.AdminRequired(), unitHandler.UpdateStatus)
+
+		// Live tracking. The heartbeat is a fleet-state write, so it is admin-gated
+		// like the other unit mutations. In production each unit would carry its own
+		// responder identity and be authorised to report only for itself — that needs
+		// the responder role we have not built yet.
+		protected.POST("/units/:id/heartbeat", middleware.AdminRequired(), presenceHandler.Heartbeat)
+		protected.GET("/units/:id/presence", presenceHandler.GetPresence)
 
 		// Shelters — reads for any authenticated user, writes admin-only (mirrors
 		// the unit registry). Occupancy changes come from P18 assignment, not here.
