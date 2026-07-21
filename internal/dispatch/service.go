@@ -184,9 +184,15 @@ func (s *DispatchService) Candidates(ctx context.Context, incidentID, preferredT
 		return nil, nil, "", err
 	}
 
+	// The incident's severity is passed into scoring, where it re-weights speed
+	// against specialisation. It is NOT an additive component: severity is the same
+	// for every candidate, so adding it would shift all scores equally and change
+	// no ranking. See scoring.weightsForSeverity.
+	need := scoring.Need{Severity: inc.Severity, RequiredType: preferredType}
+
 	scored := make([]scoring.ScoredUnit, 0, len(units))
 	for i := range units {
-		score, bd := scoring.Score(&units[i], preferredType)
+		score, bd := scoring.ScoreUnit(&units[i], need)
 		scored = append(scored, scoring.ScoredUnit{Unit: units[i], Score: score, Breakdown: bd})
 	}
 	// Stable sort by score descending: ties keep the incoming (nearest-first) order.

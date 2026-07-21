@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/geo"
+	"github.com/AtharvGupta360/CrisisLink/internal/scoring"
 	"github.com/AtharvGupta360/CrisisLink/internal/shelter"
 )
 
@@ -72,7 +74,13 @@ func (s *VictimService) List(ctx context.Context, status string, limit, offset i
 
 // NearestShelters returns the victim and the nearest open shelters with room (KNN).
 // P18 will assign the victim to a chosen one.
-func (s *VictimService) NearestShelters(ctx context.Context, victimID string, limit int) (*Victim, []shelter.Shelter, error) {
+// NearestShelters returns the victim plus RANKED candidate shelters.
+//
+// The KNN query alone only answers "which are nearest". Scoring adds capacity
+// headroom, so at similar distances an emptier shelter outranks one about to fill.
+// That spreads load and makes the subsequent admission more likely to succeed
+// instead of bouncing off the P18 capacity guard.
+func (s *VictimService) NearestShelters(ctx context.Context, victimID string, limit int) (*Victim, []scoring.ScoredShelter, error) {
 	v, err := s.victims.GetByID(ctx, victimID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -87,7 +95,16 @@ func (s *VictimService) NearestShelters(ctx context.Context, victimID string, li
 	if err != nil {
 		return nil, nil, err
 	}
-	return v, shelters, nil
+
+	scored := make([]scoring.ScoredShelter, 0, len(shelters))
+	for i := range shelters {
+		sc, bd := scoring.ScoreShelter(&shelters[i])
+		scored = append(scored, scoring.ScoredShelter{Shelter: shelters[i], Score: sc, Breakdown: bd})
+	}
+	// Stable sort: ties keep the KNN (nearest-first) order.
+	sort.SliceStable(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
+
+	return v, scored, nil
 }
 
 // Assign places a victim into a shelter via the no-overflow transaction, and

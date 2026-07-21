@@ -90,7 +90,7 @@ func (h *VictimHandler) NearestShelters(c *gin.Context) {
 		common.Error(c, http.StatusInternalServerError, "could not fetch shelters", "INTERNAL_ERROR")
 		return
 	}
-	common.Success(c, http.StatusOK, "nearest open shelters", gin.H{
+	common.Success(c, http.StatusOK, "ranked open shelters", gin.H{
 		"victim":   v,
 		"shelters": shelters,
 	})
