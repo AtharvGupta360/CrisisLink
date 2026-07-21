@@ -95,13 +95,21 @@ func (r *VictimRepository) GetByID(ctx context.Context, id string) (*Victim, err
 
 // List returns victims, optionally filtered by status (empty = no filter),
 // newest first, paginated.
-func (r *VictimRepository) List(ctx context.Context, status string, limit, offset int) ([]Victim, error) {
+// List returns victims, optionally filtered by status and SCOPED to one shelter.
+//
+// shelterScope is an authorization filter pushed into the QUERY rather than applied
+// after the fact. That matters: filtering in Go would still have pulled every
+// victim's PII out of the database and into process memory, so a logging or
+// serialization mistake could leak what the caller was never allowed to see. Empty
+// scope means unrestricted, which only operators and admins ever get.
+func (r *VictimRepository) List(ctx context.Context, status, shelterScope string, limit, offset int) ([]Victim, error) {
 	const q = `
 		SELECT ` + victimColumns + ` FROM victims
 		WHERE ($1 = '' OR status = $1)
+		  AND ($2 = '' OR shelter_id = $2::uuid)
 		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3`
-	rows, err := r.pool.Query(ctx, q, status, limit, offset)
+		LIMIT $3 OFFSET $4`
+	rows, err := r.pool.Query(ctx, q, status, shelterScope, limit, offset)
 	if err != nil {
 		return nil, err
 	}

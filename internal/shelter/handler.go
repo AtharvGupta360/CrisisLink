@@ -8,6 +8,7 @@ import (
 
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/geo"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/middleware"
 )
 
 type ShelterHandler struct {
@@ -90,6 +91,13 @@ func (h *ShelterHandler) UpdateStatus(c *gin.Context) {
 	var req UpdateShelterStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.Error(c, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+		return
+	}
+
+	// Object-level check: RequireRole established "a shelter manager"; this
+	// establishes "the manager OF THIS shelter". Operators/admins are unbound.
+	if !middleware.ActorFrom(c).OwnsShelter(c.Param("id")) {
+		common.Error(c, http.StatusForbidden, "you may only manage your own shelter", "FORBIDDEN")
 		return
 	}
 

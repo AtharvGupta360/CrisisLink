@@ -74,3 +74,41 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		"token": token,
 	})
 }
+
+// AssignRoleRequest is the admin's role change. UnitID/ShelterID are pointers so
+// "absent" is distinguishable from "empty string".
+type AssignRoleRequest struct {
+	Role      string  `json:"role" binding:"required"`
+	UnitID    *string `json:"unitId"`
+	ShelterID *string `json:"shelterId"`
+}
+
+// AssignRole handles PATCH /admin/users/:id/role — the only path by which a
+// privileged role is ever granted. Registration always produces a citizen, so
+// there is no self-service escalation.
+func (h *AuthHandler) AssignRole(c *gin.Context) {
+	var req AssignRoleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, http.StatusBadRequest, "role is required", "VALIDATION_ERROR")
+		return
+	}
+
+	u, err := h.authService.AssignRole(c.Request.Context(), c.Param("id"), req.Role, req.UnitID, req.ShelterID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidRole):
+			common.Error(c, http.StatusBadRequest, "invalid role", "VALIDATION_ERROR")
+		case errors.Is(err, ErrBindingMissing):
+			common.Error(c, http.StatusBadRequest,
+				"responder requires unitId; shelter_manager requires shelterId", "VALIDATION_ERROR")
+		case errors.Is(err, ErrUserNotFound):
+			common.Error(c, http.StatusNotFound, "user not found", "NOT_FOUND")
+		default:
+			common.Error(c, http.StatusInternalServerError, "could not assign role", "INTERNAL_ERROR")
+		}
+		return
+	}
+	// The user must obtain a NEW token for this to take effect: the old one still
+	// carries the previous role and bindings until it expires.
+	common.Success(c, http.StatusOK, "role assigned; user must re-login for it to take effect", u)
+}

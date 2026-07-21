@@ -16,8 +16,8 @@ import (
 // caller's identity on the context for downstream handlers. Any failure writes a
 // 401 and aborts the chain — the handler never runs.
 //
-// RBAC (P6) layers on top: an AdminRequired middleware placed AFTER this one
-// reads the role we set here.
+// RBAC layers on top: RequireRole, placed AFTER this one, reads the role set
+// here; handlers then apply object-level ownership checks via ActorFrom.
 func AuthRequired(jwtCfg *config.JWTConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
@@ -50,6 +50,10 @@ func AuthRequired(jwtCfg *config.JWTConfig) gin.HandlerFunc {
 		c.Set("userID", claims.UserID)
 		c.Set("username", claims.Username)
 		c.Set("role", claims.Role)
+		// Ownership bindings from the token, used by handlers for object-level
+		// checks. Empty for roles that are not bound to a resource.
+		c.Set("unitID", claims.UnitID)
+		c.Set("shelterID", claims.ShelterID)
 		c.Next()
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/AtharvGupta360/CrisisLink/internal/incident"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/middleware"
 	"github.com/AtharvGupta360/CrisisLink/internal/unit"
 )
 
@@ -145,6 +146,26 @@ func (h *DispatchHandler) AdvanceStatus(c *gin.Context) {
 	var req advanceStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.Error(c, http.StatusBadRequest, "status must be one of en_route, on_scene, completed, cancelled", "VALIDATION_ERROR")
+		return
+	}
+
+	// Object-level check. The dispatch must be looked up FIRST, because ownership
+	// lives on the resource (its unit), not in the URL. A responder may advance only
+	// the dispatch assigned to their own unit; operators and admins may advance any.
+	//
+	// The extra read is deliberate: authorization that trusts the request to name
+	// its own subject is not authorization at all.
+	existing, err := h.svc.GetDispatch(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		if errors.Is(err, ErrDispatchNotFound) {
+			common.Error(c, http.StatusNotFound, "dispatch not found", "NOT_FOUND")
+			return
+		}
+		common.Error(c, http.StatusInternalServerError, "could not load dispatch", "INTERNAL_ERROR")
+		return
+	}
+	if !middleware.ActorFrom(c).OwnsUnit(existing.UnitID) {
+		common.Error(c, http.StatusForbidden, "you may only advance your own unit's dispatch", "FORBIDDEN")
 		return
 	}
 

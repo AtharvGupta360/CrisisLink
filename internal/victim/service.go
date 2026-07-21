@@ -68,8 +68,8 @@ func (s *VictimService) GetByID(ctx context.Context, id string) (*Victim, error)
 	return v, nil
 }
 
-func (s *VictimService) List(ctx context.Context, status string, limit, offset int) ([]Victim, error) {
-	return s.victims.List(ctx, status, limit, offset)
+func (s *VictimService) List(ctx context.Context, status, shelterScope string, limit, offset int) ([]Victim, error) {
+	return s.victims.List(ctx, status, shelterScope, limit, offset)
 }
 
 // NearestShelters returns the victim and the nearest open shelters with room (KNN).

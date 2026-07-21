@@ -7,8 +7,9 @@ import (
 
 // Aggregate types (which kind of entity an event is about).
 const (
-	AggregateDispatch = "dispatch"
-	AggregateVictim   = "victim"
+	AggregateDispatch  = "dispatch"
+	AggregateVictim    = "victim"
+	AggregateTransport = "transport"
 )
 
 // Event types. Namespaced <aggregate>.<past-tense-fact> — events describe things
@@ -17,6 +18,8 @@ const (
 	EventDispatchCreated   = "dispatch.created"
 	EventDispatchCompleted = "dispatch.completed"
 	EventVictimAssigned    = "victim.assigned"
+	EventTransportBooked   = "transport.booked"
+	EventTransportReleased = "transport.released"
 )
 
 // OutboxEvent is one row of the transactional outbox. It is written in the same

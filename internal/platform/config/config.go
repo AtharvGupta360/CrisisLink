@@ -138,5 +138,40 @@ func LoadConfig(path string) (*Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+	if err := cfg.validateSecrets(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+// devJWTSecret is the placeholder shipped in the repo so a fresh clone runs. It is
+// public by definition — anyone who can read the source can forge a token signed
+// with it, including an admin one.
+const devJWTSecret = "dev-secret-change-in-prod"
+
+// validateSecrets refuses to boot with a known-public secret outside development.
+//
+// This is a FAIL-FAST, and the choice of failure mode is the point. A warning would
+// be ignored; booting anyway means the deployment is silently forgeable and nobody
+// finds out until it is exploited. Crashing at startup is loud, immediate, and
+// happens before any traffic is served. Configuration mistakes should be caught by
+// the process refusing to exist, not by an alert nobody reads.
+//
+// The check is scoped to release mode so local development stays frictionless —
+// security controls that make development painful get disabled and stay disabled.
+func (c *Config) validateSecrets() error {
+	if c.Server.Mode != "release" {
+		return nil
+	}
+	if c.JWT.SecretKey == "" || c.JWT.SecretKey == devJWTSecret {
+		return fmt.Errorf(
+			"refusing to start in release mode with the default JWT secret: " +
+				"set jwt.secretkey (or JWT_SECRETKEY) to a strong random value")
+	}
+	if len(c.JWT.SecretKey) < 32 {
+		// HS256 keys shorter than the 256-bit hash output weaken the HMAC and are
+		// brute-forceable offline once an attacker has any valid token.
+		return fmt.Errorf("jwt.secretkey must be at least 32 characters in release mode")
+	}
+	return nil
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/geo"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/middleware"
 )
 
 type Handler struct {
@@ -40,6 +41,16 @@ func (h *Handler) Heartbeat(c *gin.Context) {
 	}
 
 	unitID := c.Param("id")
+
+	// OBJECT-LEVEL AUTHORIZATION. The role gate only established that the caller is
+	// a responder; this establishes that it is THEIR unit. Without it any responder
+	// could spoof any other unit's position — role-checked and still broken.
+	// Operators and admins are unbound and may report for any unit.
+	if !middleware.ActorFrom(c).OwnsUnit(unitID) {
+		common.Error(c, http.StatusForbidden, "you may only send heartbeats for your own unit", "FORBIDDEN")
+		return
+	}
+
 	if err := h.svc.Heartbeat(c.Request.Context(), unitID, req.Latitude, req.Longitude); err != nil {
 		if errors.Is(err, geo.ErrInvalidCoordinates) {
 			common.Error(c, http.StatusBadRequest, "coordinates out of range", "VALIDATION_ERROR")

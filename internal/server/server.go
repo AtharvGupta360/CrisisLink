@@ -22,11 +22,13 @@ import (
 	"github.com/AtharvGupta360/CrisisLink/internal/incident"
 	"github.com/AtharvGupta360/CrisisLink/internal/notification"
 	"github.com/AtharvGupta360/CrisisLink/internal/outbox"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/authz"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/config"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/middleware"
 	"github.com/AtharvGupta360/CrisisLink/internal/presence"
 	"github.com/AtharvGupta360/CrisisLink/internal/shelter"
+	"github.com/AtharvGupta360/CrisisLink/internal/transport"
 	"github.com/AtharvGupta360/CrisisLink/internal/unit"
 	"github.com/AtharvGupta360/CrisisLink/internal/victim"
 )
@@ -117,6 +119,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 	victimService := victim.NewVictimService(victimRepo, shelterRepo, shelterCache)
 	victimHandler := victim.NewVictimHandler(victimService)
 
+	transportRepo := transport.NewTransportRepository(pool, outboxRepo)
+	transportService := transport.NewTransportService(transportRepo)
+	transportHandler := transport.NewTransportHandler(transportService)
+
 	outboxService := outbox.NewOutboxService(outboxRepo)
 	outboxHandler := outbox.NewOutboxHandler(outboxService)
 
@@ -153,14 +159,14 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 		protected.GET("/incidents/:id/candidates", dispatchHandler.Candidates) // nearest available units (KNN)
 		// Dispatch a unit — the no-double-booking reservation. Admin-only, since it
 		// mutates fleet state (like the other unit-status writes below).
-		protected.POST("/incidents/:id/dispatch", middleware.AdminRequired(), dispatchHandler.Dispatch)
+		protected.POST("/incidents/:id/dispatch", middleware.RequireRole(authz.RoleOperator, authz.RoleAdmin), dispatchHandler.Dispatch)
 		protected.GET("/incidents/:id/dispatches", dispatchHandler.ListByIncident) // an incident's dispatches
-		protected.PATCH("/incidents/:id/status", incidentHandler.UpdateStatus)
+		protected.PATCH("/incidents/:id/status", middleware.RequireRole(authz.RoleOperator, authz.RoleAdmin), incidentHandler.UpdateStatus)
 
 		// Dispatch lifecycle (P15). Reads for any authenticated user; advancing the
 		// state machine is admin-only (it mutates unit + incident state).
 		protected.GET("/dispatches/:id", dispatchHandler.Get)
-		protected.PATCH("/dispatches/:id/status", middleware.AdminRequired(), dispatchHandler.AdvanceStatus)
+		protected.PATCH("/dispatches/:id/status", middleware.RequireRole(authz.RoleResponder, authz.RoleOperator, authz.RoleAdmin), dispatchHandler.AdvanceStatus)
 
 		// Rescue units — reads for any authenticated user, writes admin-only
 		// (per-route AdminRequired runs after the group's AuthRequired).
@@ -168,37 +174,52 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 		protected.GET("/units/nearby", presenceHandler.NearbyLive)
 		protected.GET("/units", unitHandler.List)
 		protected.GET("/units/:id", unitHandler.GetByID)
-		protected.POST("/units", middleware.AdminRequired(), unitHandler.Create)
-		protected.PATCH("/units/:id/status", middleware.AdminRequired(), unitHandler.UpdateStatus)
+		protected.POST("/units", middleware.RequireRole(authz.RoleAdmin), unitHandler.Create)
+		protected.PATCH("/units/:id/status", middleware.RequireRole(authz.RoleOperator, authz.RoleAdmin), unitHandler.UpdateStatus)
 
 		// Live tracking. The heartbeat is a fleet-state write, so it is admin-gated
 		// like the other unit mutations. In production each unit would carry its own
 		// responder identity and be authorised to report only for itself — that needs
 		// the responder role we have not built yet.
-		protected.POST("/units/:id/heartbeat", middleware.AdminRequired(), presenceHandler.Heartbeat)
+		protected.POST("/units/:id/heartbeat", middleware.RequireRole(authz.RoleResponder, authz.RoleOperator, authz.RoleAdmin), presenceHandler.Heartbeat)
 		protected.GET("/units/:id/presence", presenceHandler.GetPresence)
 
 		// Shelters — reads for any authenticated user, writes admin-only (mirrors
 		// the unit registry). Occupancy changes come from P18 assignment, not here.
 		protected.GET("/shelters", shelterHandler.List)
 		protected.GET("/shelters/:id", shelterHandler.GetByID)
-		protected.POST("/shelters", middleware.AdminRequired(), shelterHandler.Create)
-		protected.PATCH("/shelters/:id/status", middleware.AdminRequired(), shelterHandler.UpdateStatus)
+		protected.POST("/shelters", middleware.RequireRole(authz.RoleAdmin), shelterHandler.Create)
+		protected.PATCH("/shelters/:id/status", middleware.RequireRole(authz.RoleShelterManager, authz.RoleOperator, authz.RoleAdmin), shelterHandler.UpdateStatus)
 
 		// Victims — intake and reads for any authenticated user (like incident
 		// reporting). Assignment to a shelter (with the capacity guard) is P18.
+		// Transport: evacuation vehicles with SEATS (a counter incremented by N).
+		// Reads open to any authenticated user; fleet writes and seat bookings are
+		// admin-gated like the other resource mutations.
+		protected.GET("/transports/nearest", transportHandler.Nearest) // static before :id
+		protected.GET("/transports", transportHandler.List)
+		protected.GET("/transports/:id", transportHandler.GetByID)
+		protected.POST("/transports", middleware.RequireRole(authz.RoleAdmin), transportHandler.Create)
+		protected.POST("/incidents/:id/transport-bookings", middleware.RequireRole(authz.RoleOperator, authz.RoleAdmin), transportHandler.Book)
+		protected.GET("/incidents/:id/transport-bookings", transportHandler.ListBookings)
+		protected.PATCH("/transport-bookings/:id/cancel", middleware.RequireRole(authz.RoleOperator, authz.RoleAdmin), transportHandler.Cancel)
+
+		// Victim records are PII in a crisis (name, live location, which shelter).
+		// Intake stays open — a citizen may report someone needing help — but
+		// READING the register is restricted, and a shelter manager sees only
+		// victims in their own shelter (filtered in the handler).
 		protected.POST("/victims", victimHandler.Create)
-		protected.GET("/victims", victimHandler.List)
-		protected.GET("/victims/:id", victimHandler.GetByID)
-		protected.GET("/victims/:id/shelters", victimHandler.NearestShelters) // nearest open shelters (KNN)
+		protected.GET("/victims", middleware.RequireRole(authz.RoleShelterManager, authz.RoleOperator, authz.RoleAdmin), victimHandler.List)
+		protected.GET("/victims/:id", middleware.RequireRole(authz.RoleShelterManager, authz.RoleOperator, authz.RoleAdmin), victimHandler.GetByID)
+		protected.GET("/victims/:id/shelters", middleware.RequireRole(authz.RoleShelterManager, authz.RoleOperator, authz.RoleAdmin), victimHandler.NearestShelters) // nearest open shelters (KNN)
 		// Assign a victim to a shelter — the no-overflow transaction. Admin-only
 		// (mutates shelter occupancy), mirroring the dispatch reservation.
-		protected.POST("/victims/:id/assign", middleware.AdminRequired(), victimHandler.Assign)
+		protected.POST("/victims/:id/assign", middleware.RequireRole(authz.RoleShelterManager, authz.RoleOperator, authz.RoleAdmin), victimHandler.Assign)
 
 		// Admin-only routes: AdminRequired runs AFTER AuthRequired and checks the
 		// role it set. Real admin routes (rescue-unit CRUD, etc.) attach here later.
 		admin := protected.Group("/admin")
-		admin.Use(middleware.AdminRequired())
+		admin.Use(middleware.RequireRole(authz.RoleAdmin))
 		{
 			admin.GET("/ping", func(c *gin.Context) {
 				common.Success(c, http.StatusOK, "admin access granted", gin.H{
@@ -208,6 +229,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 
 			// Ops view onto the transactional outbox (P19). The relay (P20) will
 			// publish these and flip published_at.
+			// Role assignment is the single privileged-escalation path in the system,
+			// and it is admin-only. Registration always creates a citizen.
+			admin.PATCH("/users/:id/role", authHandler.AssignRole)
+
 			admin.GET("/outbox", outboxHandler.List)
 			admin.GET("/outbox/dead", outboxHandler.ListDead)
 

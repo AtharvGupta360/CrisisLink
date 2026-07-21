@@ -6,8 +6,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/authz"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/geo"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/middleware"
 	"github.com/AtharvGupta360/CrisisLink/internal/shelter"
 )
 
@@ -51,8 +53,17 @@ func (h *VictimHandler) Create(c *gin.Context) {
 }
 
 func (h *VictimHandler) List(c *gin.Context) {
+	// A shelter manager sees ONLY the victims in their own shelter. The scope comes
+	// from the verified token, never from a query parameter — otherwise a manager
+	// could simply ask for someone else's shelter and the restriction would be
+	// decorative. Operators and admins pass an empty scope and see everything.
+	scope := ""
+	if actor := middleware.ActorFrom(c); actor.Is(authz.RoleShelterManager) {
+		scope = actor.ShelterID
+	}
+
 	victims, err := h.svc.List(c.Request.Context(),
-		c.Query("status"),
+		c.Query("status"), scope,
 		common.ClampInt(c.Query("limit"), 50, 1, 200),
 		common.ClampInt(c.Query("offset"), 0, 0, 1_000_000),
 	)
@@ -73,6 +84,17 @@ func (h *VictimHandler) GetByID(c *gin.Context) {
 		common.Error(c, http.StatusInternalServerError, "could not fetch victim", "INTERNAL_ERROR")
 		return
 	}
+	// Object-level check, applied AFTER the lookup because ownership lives on the
+	// record: a shelter manager may only read a victim housed in their own shelter.
+	// Returning 404 rather than 403 here is deliberate — a 403 would confirm the
+	// record exists, which is itself a disclosure when the id is being enumerated.
+	if actor := middleware.ActorFrom(c); actor.Is(authz.RoleShelterManager) {
+		if v.ShelterID == nil || *v.ShelterID != actor.ShelterID {
+			common.Error(c, http.StatusNotFound, "victim not found", "NOT_FOUND")
+			return
+		}
+	}
+
 	common.Success(c, http.StatusOK, "victim", v)
 }
 

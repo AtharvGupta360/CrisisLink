@@ -17,17 +17,32 @@ type Claims struct {
 	UserID   string `json:"userId"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
+
+	// Ownership bindings, carried in the token so an authorization decision needs
+	// no database round trip on every request — the whole point of a stateless JWT.
+	//
+	// THE TRADEOFF, stated honestly: these go STALE. If an admin reassigns a
+	// responder to a different unit, the old token keeps the old binding until it
+	// expires. Staleness is therefore bounded by token lifetime, which is the
+	// argument for keeping that lifetime short (and for refresh tokens). The
+	// alternative — reading the user row on every request — is correct but throws
+	// away statelessness and puts a query on the hot path.
+	UnitID    string `json:"unitId,omitempty"`
+	ShelterID string `json:"shelterId,omitempty"`
+
 	jwt.RegisteredClaims
 }
 
 // GenerateToken signs a new HS256 token carrying the user's identity, expiring
 // after cfg.ExpiryHours. The signature = HMAC-SHA256(header.payload, secretKey);
 // without the secret key an attacker cannot alter the claims undetected.
-func GenerateToken(userID, username, role string, cfg *config.JWTConfig) (string, error) {
+func GenerateToken(userID, username, role, unitID, shelterID string, cfg *config.JWTConfig) (string, error) {
 	claims := Claims{
-		UserID:   userID,
-		Username: username,
-		Role:     role,
+		UserID:    userID,
+		Username:  username,
+		Role:      role,
+		UnitID:    unitID,
+		ShelterID: shelterID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(cfg.ExpiryHours) * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
