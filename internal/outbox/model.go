@@ -29,6 +29,14 @@ type OutboxEvent struct {
 	Payload       json.RawMessage `json:"payload"`
 	CreatedAt     time.Time       `json:"createdAt"`
 	PublishedAt   *time.Time      `json:"publishedAt"` // nil until relayed
+
+	// Retry/dead-letter state. Attempts counts failed publishes; NextAttemptAt is
+	// the backoff gate the relay filters on; DeadAt is set once the retry budget is
+	// exhausted, taking the row out of circulation permanently.
+	Attempts      int        `json:"attempts"`
+	LastError     *string    `json:"lastError,omitempty"`
+	NextAttemptAt time.Time  `json:"nextAttemptAt"`
+	DeadAt        *time.Time `json:"deadAt,omitempty"`
 }
 
 // EventEnvelope is the on-the-wire shape of a published event (relay -> Kafka ->

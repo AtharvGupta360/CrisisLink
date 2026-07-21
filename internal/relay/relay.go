@@ -47,12 +47,12 @@ func (r *Relay) Run(ctx context.Context) error {
 	}
 }
 
-// drain publishes batches until the outbox is empty (or an error / ctx stop). Each
-// batch: publish to Kafka, then mark published — the order that makes it
-// at-least-once (see OutboxRepository.PublishBatch).
+// drain publishes batches until nothing is due (or ctx stops). Each batch:
+// publish to Kafka, then mark published — the order that makes it at-least-once
+// (see OutboxRepository.PublishBatch).
 func (r *Relay) drain(ctx context.Context) {
 	for {
-		n, err := r.outbox.PublishBatch(ctx, r.batch, func(e outbox.OutboxEvent) error {
+		res, err := r.outbox.PublishBatch(ctx, r.batch, func(e outbox.OutboxEvent) error {
 			value, merr := json.Marshal(outbox.EventEnvelope{
 				ID:            e.ID,
 				EventType:     e.EventType,
@@ -68,15 +68,31 @@ func (r *Relay) drain(ctx context.Context) {
 			// (per-aggregate ordering preserved).
 			return r.pub.Publish(ctx, e.AggregateID, value)
 		})
-		if n > 0 {
-			r.log.Infof("relay published %d event(s)", n)
-		}
+		// Only INFRASTRUCTURE errors (the database) stop the loop. A publish failure
+		// is not returned here — it has already been recorded on its own row with a
+		// backoff, so the loop must keep going rather than let one bad event stall
+		// the drain.
 		if err != nil {
-			r.log.Errorw("relay publish batch failed", "error", err)
+			r.log.Errorw("relay batch failed", "error", err)
 			return
 		}
-		if n < r.batch {
-			return // last batch wasn't full → outbox drained for now
+		if res.Published > 0 {
+			r.log.Infof("relay published %d event(s)", res.Published)
+		}
+		if res.Failed > 0 {
+			r.log.Warnw("relay had publish failures, they are backed off for retry",
+				"failed", res.Failed, "deadLettered", res.DeadLettered)
+		}
+		if res.DeadLettered > 0 {
+			// Loud on purpose: this is the "a human must look at this" signal.
+			r.log.Errorw("events exhausted their retry budget and were DEAD-LETTERED",
+				"count", res.DeadLettered, "maxAttempts", outbox.MaxPublishAttempts)
+		}
+		// Stop when the batch came back short: everything currently DUE is handled.
+		// Rows in backoff are deliberately not counted — they become due later, and
+		// a later tick will pick them up.
+		if res.Claimed < r.batch {
+			return
 		}
 	}
 }

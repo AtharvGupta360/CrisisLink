@@ -209,6 +209,7 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 			// Ops view onto the transactional outbox (P19). The relay (P20) will
 			// publish these and flip published_at.
 			admin.GET("/outbox", outboxHandler.List)
+			admin.GET("/outbox/dead", outboxHandler.ListDead)
 
 			// What the idempotent consumer produced (P21) — exactly one per event,
 			// even if Kafka delivered it twice.

@@ -18,3 +18,15 @@ func NewOutboxService(repo *OutboxRepository) *OutboxService {
 func (s *OutboxService) ListRecent(ctx context.Context, limit int) ([]OutboxEvent, error) {
 	return s.repo.ListRecent(ctx, limit)
 }
+
+// ListDead returns dead-lettered events — the ones that exhausted their retry
+// budget and now need a human.
+func (s *OutboxService) ListDead(ctx context.Context, limit int) ([]OutboxEvent, error) {
+	return s.repo.ListDead(ctx, limit)
+}
+
+// PendingLag is the outbox backlog: unpublished, not-yet-dead events. The number
+// to alarm on — a climbing lag means downstream consumers are silently stale.
+func (s *OutboxService) PendingLag(ctx context.Context) (int, error) {
+	return s.repo.PendingCount(ctx)
+}
