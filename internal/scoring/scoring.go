@@ -5,7 +5,7 @@
 // components, each of which we surface in the Breakdown.
 package scoring
 
-import "github.com/AtharvGupta360/CrisisLink/internal/models"
+import "github.com/AtharvGupta360/CrisisLink/internal/unit"
 
 // Component weights. They sum to 1.0, so a Score is always in [0, 1] and the
 // weights read as "proximity is 70% of the decision, type match 30%."
@@ -37,9 +37,9 @@ type Breakdown struct {
 // ScoredUnit pairs a unit with its dispatch score and the breakdown that produced
 // it. This is what the API returns instead of a bare unit list.
 type ScoredUnit struct {
-	Unit      models.Unit `json:"unit"`
-	Score     float64     `json:"score"`
-	Breakdown Breakdown   `json:"breakdown"`
+	Unit      unit.Unit `json:"unit"`
+	Score     float64   `json:"score"`
+	Breakdown Breakdown `json:"breakdown"`
 }
 
 // Score computes a unit's dispatch score for an incident, given the dispatcher's
@@ -49,7 +49,7 @@ type ScoredUnit struct {
 // computed relative to that incident — so proximity already answers "how far is
 // this unit from THIS event." Severity is constant across candidates and cannot
 // change their relative order, so it is intentionally not a factor here.
-func Score(unit *models.Unit, preferredType string) (float64, Breakdown) {
+func Score(unit *unit.Unit, preferredType string) (float64, Breakdown) {
 	// Proximity: linear decay from 1.0 (on top of the incident) to 0.0 at the
 	// falloff. Clamp at 0 so far-away units don't go negative.
 	prox := 1.0 - unit.DistanceMeters/proximityFalloffMeters

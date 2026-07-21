@@ -18,12 +18,16 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/auth"
-	"github.com/AtharvGupta360/CrisisLink/internal/common"
-	"github.com/AtharvGupta360/CrisisLink/internal/config"
-	"github.com/AtharvGupta360/CrisisLink/internal/handlers"
-	"github.com/AtharvGupta360/CrisisLink/internal/middleware"
-	"github.com/AtharvGupta360/CrisisLink/internal/repository"
-	"github.com/AtharvGupta360/CrisisLink/internal/service"
+	"github.com/AtharvGupta360/CrisisLink/internal/dispatch"
+	"github.com/AtharvGupta360/CrisisLink/internal/incident"
+	"github.com/AtharvGupta360/CrisisLink/internal/notification"
+	"github.com/AtharvGupta360/CrisisLink/internal/outbox"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/config"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/middleware"
+	"github.com/AtharvGupta360/CrisisLink/internal/shelter"
+	"github.com/AtharvGupta360/CrisisLink/internal/unit"
+	"github.com/AtharvGupta360/CrisisLink/internal/victim"
 )
 
 // NewServer builds the Gin engine: base middleware chain, health/ready probes,
@@ -72,37 +76,47 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 	// --- dependency injection: repository -> service -> handler ---
 	// This is the composition root for the HTTP layer. Each domain's stack is
 	// wired here and mounted under /api/v1.
-	userRepo := repository.NewUserRepository(pool)
+	userRepo := auth.NewUserRepository(pool)
 	authService := auth.NewService(userRepo, &cfg.JWT)
-	authHandler := handlers.NewAuthHandler(authService)
+	authHandler := auth.NewAuthHandler(authService)
 
-	incidentRepo := repository.NewIncidentRepository(pool)
-	incidentService := service.NewIncidentService(incidentRepo)
-	incidentHandler := handlers.NewIncidentHandler(incidentService)
+	incidentRepo := incident.NewIncidentRepository(pool)
+	incidentService := incident.NewIncidentService(incidentRepo)
+	incidentHandler := incident.NewIncidentHandler(incidentService)
 
-	unitRepo := repository.NewUnitRepository(pool)
-	unitService := service.NewUnitService(unitRepo)
-	unitHandler := handlers.NewUnitHandler(unitService)
+	unitRepo := unit.NewUnitRepository(pool)
+	unitService := unit.NewUnitService(unitRepo)
+	unitHandler := unit.NewUnitHandler(unitService)
 
-	dispatchRepo := repository.NewDispatchRepository(pool)
-	dispatchService := service.NewDispatchService(incidentRepo, unitRepo, dispatchRepo)
-	dispatchHandler := handlers.NewDispatchHandler(dispatchService)
+	// The outbox repository is constructed FIRST because it satisfies the EventWriter
+	// seam that every event-emitting module depends on. Modules receive it as an
+	// interface, so they can record domain events without knowing the outbox table.
+	outboxRepo := outbox.NewOutboxRepository(pool)
 
-	shelterRepo := repository.NewShelterRepository(pool)
-	shelterService := service.NewShelterService(shelterRepo)
-	shelterHandler := handlers.NewShelterHandler(shelterService)
+	dispatchRepo := dispatch.NewDispatchRepository(pool, unitRepo, incidentRepo, outboxRepo)
+	dispatchService := dispatch.NewDispatchService(incidentRepo, unitRepo, dispatchRepo)
+	dispatchHandler := dispatch.NewDispatchHandler(dispatchService)
 
-	victimRepo := repository.NewVictimRepository(pool)
-	victimService := service.NewVictimService(victimRepo, shelterRepo)
-	victimHandler := handlers.NewVictimHandler(victimService)
+	// ONE shared ShelterCache, injected into every service that reads or writes a
+	// shelter. It must be a single instance: two instances would mean two separate
+	// singleflight groups (so duplicate loads), and — far worse — it would be easy to
+	// hand a writer a cache whose keys it never invalidates.
+	shelterCache := shelter.NewShelterCache(rdb)
 
-	outboxRepo := repository.NewOutboxRepository(pool)
-	outboxService := service.NewOutboxService(outboxRepo)
-	outboxHandler := handlers.NewOutboxHandler(outboxService)
+	shelterRepo := shelter.NewShelterRepository(pool)
+	shelterService := shelter.NewShelterService(shelterRepo, shelterCache)
+	shelterHandler := shelter.NewShelterHandler(shelterService)
 
-	notificationRepo := repository.NewNotificationRepository(pool)
-	notificationService := service.NewNotificationService(notificationRepo)
-	notificationHandler := handlers.NewNotificationHandler(notificationService)
+	victimRepo := victim.NewVictimRepository(pool, shelterRepo, outboxRepo)
+	victimService := victim.NewVictimService(victimRepo, shelterRepo, shelterCache)
+	victimHandler := victim.NewVictimHandler(victimService)
+
+	outboxService := outbox.NewOutboxService(outboxRepo)
+	outboxHandler := outbox.NewOutboxHandler(outboxService)
+
+	notificationRepo := notification.NewNotificationRepository(pool)
+	notificationService := notification.NewNotificationService(notificationRepo)
+	notificationHandler := notification.NewNotificationHandler(notificationService)
 
 	api := r.Group("/api/v1")
 	{

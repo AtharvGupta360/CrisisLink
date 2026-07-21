@@ -1,0 +1,147 @@
+package incident
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/geo"
+)
+
+type IncidentHandler struct {
+	svc *IncidentService
+}
+
+func NewIncidentHandler(svc *IncidentService) *IncidentHandler {
+	return &IncidentHandler{svc: svc}
+}
+
+// CreateIncidentRequest is the report body. NOTE: latitude/longitude use min/max
+// but NOT `required` — gin treats a numeric 0 as "missing", and 0 is a VALID
+// coordinate (equator / prime meridian). The service re-validates the range.
+type CreateIncidentRequest struct {
+	Title       string  `json:"title" binding:"required,min=3,max=200"`
+	Description string  `json:"description" binding:"max=2000"`
+	Severity    string  `json:"severity" binding:"required,oneof=low medium high critical"`
+	Latitude    float64 `json:"latitude" binding:"min=-90,max=90"`
+	Longitude   float64 `json:"longitude" binding:"min=-180,max=180"`
+}
+
+func (h *IncidentHandler) Create(c *gin.Context) {
+	var req CreateIncidentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+		return
+	}
+
+	// The reporter is the authenticated caller — taken from the token, never the
+	// request body (a client can't report "as" someone else).
+	inc, deduped, err := h.svc.Create(c.Request.Context(), CreateIncidentInput{
+		ReporterID:  c.GetString("userID"),
+		Title:       req.Title,
+		Description: req.Description,
+		Severity:    req.Severity,
+		Latitude:    req.Latitude,
+		Longitude:   req.Longitude,
+	})
+	if err != nil {
+		if errors.Is(err, ErrInvalidSeverity) || errors.Is(err, geo.ErrInvalidCoordinates) {
+			common.Error(c, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+			return
+		}
+		common.Error(c, http.StatusInternalServerError, "could not create incident", "INTERNAL_ERROR")
+		return
+	}
+
+	// Merged into an existing incident -> 200 (nothing new created); otherwise 201.
+	if deduped {
+		common.Success(c, http.StatusOK, "duplicate report merged into existing incident", inc)
+		return
+	}
+	common.Success(c, http.StatusCreated, "incident reported", inc)
+}
+
+func (h *IncidentHandler) GetByID(c *gin.Context) {
+	inc, err := h.svc.GetByID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		if errors.Is(err, ErrIncidentNotFound) {
+			common.Error(c, http.StatusNotFound, "incident not found", "NOT_FOUND")
+			return
+		}
+		common.Error(c, http.StatusInternalServerError, "could not fetch incident", "INTERNAL_ERROR")
+		return
+	}
+	common.Success(c, http.StatusOK, "incident", inc)
+}
+
+func (h *IncidentHandler) List(c *gin.Context) {
+	limit := common.ClampInt(c.Query("limit"), 20, 1, 100)
+	offset := common.ClampInt(c.Query("offset"), 0, 0, 1_000_000)
+
+	incidents, err := h.svc.List(c.Request.Context(), limit, offset)
+	if err != nil {
+		common.Error(c, http.StatusInternalServerError, "could not list incidents", "INTERNAL_ERROR")
+		return
+	}
+	common.Success(c, http.StatusOK, "incidents", incidents)
+}
+
+// Nearby handles GET /incidents/nearby?lat=&lng=&radius= — the radius search.
+// lat/lng are required; radius defaults to 5000m.
+func (h *IncidentHandler) Nearby(c *gin.Context) {
+	lat, errLat := strconv.ParseFloat(c.Query("lat"), 64)
+	lng, errLng := strconv.ParseFloat(c.Query("lng"), 64)
+	if errLat != nil || errLng != nil {
+		common.Error(c, http.StatusBadRequest, "lat and lng query params are required", "VALIDATION_ERROR")
+		return
+	}
+	radius := 5000.0
+	if raw := c.Query("radius"); raw != "" {
+		if r, err := strconv.ParseFloat(raw, 64); err == nil {
+			radius = r
+		}
+	}
+
+	incidents, err := h.svc.Nearby(c.Request.Context(), lat, lng, radius, 100)
+	if err != nil {
+		if errors.Is(err, geo.ErrInvalidCoordinates) || errors.Is(err, ErrInvalidRadius) {
+			common.Error(c, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+			return
+		}
+		common.Error(c, http.StatusInternalServerError, "could not search incidents", "INTERNAL_ERROR")
+		return
+	}
+	common.Success(c, http.StatusOK, "nearby incidents", incidents)
+}
+
+type UpdateStatusRequest struct {
+	Status string `json:"status" binding:"required,oneof=reported verified dispatched resolved cancelled"`
+}
+
+func (h *IncidentHandler) UpdateStatus(c *gin.Context) {
+	var req UpdateStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+		return
+	}
+
+	inc, err := h.svc.UpdateStatus(c.Request.Context(), c.Param("id"), req.Status)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrIncidentNotFound):
+			common.Error(c, http.StatusNotFound, "incident not found", "NOT_FOUND")
+		case errors.Is(err, ErrIllegalTransition):
+			// 409 Conflict: the request is valid but conflicts with current state.
+			common.Error(c, http.StatusConflict, err.Error(), "ILLEGAL_TRANSITION")
+		case errors.Is(err, ErrInvalidStatus):
+			common.Error(c, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+		default:
+			common.Error(c, http.StatusInternalServerError, "could not update status", "INTERNAL_ERROR")
+		}
+		return
+	}
+	common.Success(c, http.StatusOK, "status updated", inc)
+}

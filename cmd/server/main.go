@@ -7,9 +7,9 @@ package main
 import (
 	"log"
 
-	"github.com/AtharvGupta360/CrisisLink/internal/common"
-	"github.com/AtharvGupta360/CrisisLink/internal/config"
-	"github.com/AtharvGupta360/CrisisLink/internal/database"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/config"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/database"
 	"github.com/AtharvGupta360/CrisisLink/internal/server"
 )
 

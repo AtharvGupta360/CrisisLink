@@ -19,8 +19,8 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
-	"github.com/AtharvGupta360/CrisisLink/internal/config"
-	"github.com/AtharvGupta360/CrisisLink/internal/database/migrations"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/config"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/database/migrations"
 )
 
 func main() {

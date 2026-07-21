@@ -14,8 +14,8 @@ import (
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 
-	"github.com/AtharvGupta360/CrisisLink/internal/models"
-	"github.com/AtharvGupta360/CrisisLink/internal/repository"
+	"github.com/AtharvGupta360/CrisisLink/internal/notification"
+	"github.com/AtharvGupta360/CrisisLink/internal/outbox"
 )
 
 const (
@@ -33,13 +33,13 @@ type Publisher interface {
 // Consumer reads the event topic as part of a Kafka consumer group.
 type Consumer struct {
 	reader *kafka.Reader
-	inbox  *repository.InboxRepository
+	inbox  *outbox.InboxRepository
 	dlq    Publisher // where poison / repeatedly-failing messages go
 	name   string    // scopes the dedup ledger: (consumer, event_id)
 	log    *zap.SugaredLogger
 }
 
-func New(brokers []string, topic, groupID string, inbox *repository.InboxRepository, dlq Publisher, log *zap.SugaredLogger) *Consumer {
+func New(brokers []string, topic, groupID string, inbox *outbox.InboxRepository, dlq Publisher, log *zap.SugaredLogger) *Consumer {
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:  brokers,
 		Topic:    topic,
@@ -80,7 +80,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 // process handles one message: decode, then retry the idempotent side effect up to
 // maxAttempts, then dead-letter if it still won't go through.
 func (c *Consumer) process(ctx context.Context, m kafka.Message) {
-	var e models.EventEnvelope
+	var e outbox.EventEnvelope
 	if err := json.Unmarshal(m.Value, &e); err != nil {
 		// PERMANENT failure: this will never parse, so retrying is pointless.
 		// Straight to the DLQ, then commit and keep the partition moving.
@@ -92,7 +92,7 @@ func (c *Consumer) process(ctx context.Context, m kafka.Message) {
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// The dedup marker + the notification commit together (see InboxRepository).
 		processed, err := c.inbox.ProcessOnce(ctx, c.name, e.ID,
-			repository.NotificationWriter(e.ID, e.EventType, notificationMessage(e)),
+			notification.NotificationWriter(e.ID, e.EventType, notificationMessage(e)),
 		)
 		if err == nil {
 			if processed {
@@ -134,13 +134,13 @@ func (c *Consumer) deadLetter(ctx context.Context, m kafka.Message, reason strin
 	c.log.Warnw("event DEAD-LETTERED", "reason", reason, "offset", m.Offset)
 }
 
-func notificationMessage(e models.EventEnvelope) string {
+func notificationMessage(e outbox.EventEnvelope) string {
 	switch e.EventType {
-	case models.EventDispatchCreated:
+	case outbox.EventDispatchCreated:
 		return fmt.Sprintf("Unit dispatched (dispatch %s)", e.AggregateID)
-	case models.EventDispatchCompleted:
+	case outbox.EventDispatchCompleted:
 		return fmt.Sprintf("Dispatch %s completed", e.AggregateID)
-	case models.EventVictimAssigned:
+	case outbox.EventVictimAssigned:
 		return fmt.Sprintf("Victim %s assigned to a shelter", e.AggregateID)
 	default:
 		return fmt.Sprintf("%s (%s)", e.EventType, e.AggregateID)

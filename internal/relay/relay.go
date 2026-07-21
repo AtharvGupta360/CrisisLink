@@ -10,8 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/AtharvGupta360/CrisisLink/internal/models"
-	"github.com/AtharvGupta360/CrisisLink/internal/repository"
+	"github.com/AtharvGupta360/CrisisLink/internal/outbox"
 )
 
 // Publisher sends one serialized event to the broker. Abstracted so the relay is
@@ -22,14 +21,14 @@ type Publisher interface {
 
 // Relay polls the outbox on an interval and publishes unpublished events.
 type Relay struct {
-	outbox   *repository.OutboxRepository
+	outbox   *outbox.OutboxRepository
 	pub      Publisher
 	interval time.Duration
 	batch    int
 	log      *zap.SugaredLogger
 }
 
-func New(outbox *repository.OutboxRepository, pub Publisher, interval time.Duration, batch int, log *zap.SugaredLogger) *Relay {
+func New(outbox *outbox.OutboxRepository, pub Publisher, interval time.Duration, batch int, log *zap.SugaredLogger) *Relay {
 	return &Relay{outbox: outbox, pub: pub, interval: interval, batch: batch, log: log}
 }
 
@@ -53,8 +52,8 @@ func (r *Relay) Run(ctx context.Context) error {
 // at-least-once (see OutboxRepository.PublishBatch).
 func (r *Relay) drain(ctx context.Context) {
 	for {
-		n, err := r.outbox.PublishBatch(ctx, r.batch, func(e models.OutboxEvent) error {
-			value, merr := json.Marshal(models.EventEnvelope{
+		n, err := r.outbox.PublishBatch(ctx, r.batch, func(e outbox.OutboxEvent) error {
+			value, merr := json.Marshal(outbox.EventEnvelope{
 				ID:            e.ID,
 				EventType:     e.EventType,
 				AggregateType: e.AggregateType,

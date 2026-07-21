@@ -12,12 +12,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/AtharvGupta360/CrisisLink/internal/common"
-	"github.com/AtharvGupta360/CrisisLink/internal/config"
 	"github.com/AtharvGupta360/CrisisLink/internal/consumer"
-	"github.com/AtharvGupta360/CrisisLink/internal/database"
+	"github.com/AtharvGupta360/CrisisLink/internal/outbox"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/config"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/database"
 	"github.com/AtharvGupta360/CrisisLink/internal/relay"
-	"github.com/AtharvGupta360/CrisisLink/internal/repository"
 )
 
 // consumerGroup names both the Kafka consumer group and the dedup ledger scope.
@@ -38,7 +38,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	inbox := repository.NewInboxRepository(pool)
+	inbox := outbox.NewInboxRepository(pool)
 
 	// Make sure both topics exist before we read/write them.
 	for _, t := range []string{cfg.Kafka.Topic, cfg.Kafka.DLQTopic} {

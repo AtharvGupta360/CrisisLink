@@ -7,9 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/AtharvGupta360/CrisisLink/internal/config"
-	"github.com/AtharvGupta360/CrisisLink/internal/models"
-	"github.com/AtharvGupta360/CrisisLink/internal/repository"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/config"
 )
 
 // Sentinel errors the handler maps to HTTP status codes.
@@ -21,11 +19,11 @@ var (
 // Service holds the auth business logic. It depends on the repository (data) and
 // the JWT config (for token issuance).
 type Service struct {
-	users  *repository.UserRepository
+	users  *UserRepository
 	jwtCfg *config.JWTConfig
 }
 
-func NewService(users *repository.UserRepository, jwtCfg *config.JWTConfig) *Service {
+func NewService(users *UserRepository, jwtCfg *config.JWTConfig) *Service {
 	return &Service{users: users, jwtCfg: jwtCfg}
 }
 
@@ -33,13 +31,13 @@ func NewService(users *repository.UserRepository, jwtCfg *config.JWTConfig) *Ser
 // New users default to the 'citizen' role. Duplicate username/email is detected
 // via the Postgres UNIQUE-violation error code (23505) — this is race-free,
 // unlike a check-then-insert which two concurrent registrations could both pass.
-func (s *Service) Register(ctx context.Context, username, email, password string) (*models.User, string, error) {
+func (s *Service) Register(ctx context.Context, username, email, password string) (*User, string, error) {
 	hash, err := HashPassword(password)
 	if err != nil {
 		return nil, "", err
 	}
 
-	u := &models.User{
+	u := &User{
 		Username: username,
 		Email:    email,
 		Password: hash,
@@ -63,7 +61,7 @@ func (s *Service) Register(ctx context.Context, username, email, password string
 // Login verifies credentials and returns the user + a token. It returns the SAME
 // ErrInvalidCredentials whether the email doesn't exist OR the password is wrong
 // — never reveal which, or an attacker can enumerate registered emails.
-func (s *Service) Login(ctx context.Context, email, password string) (*models.User, string, error) {
+func (s *Service) Login(ctx context.Context, email, password string) (*User, string, error) {
 	u, err := s.users.GetByEmail(ctx, email)
 	if err != nil {
 		return nil, "", ErrInvalidCredentials

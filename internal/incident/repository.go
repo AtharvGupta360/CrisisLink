@@ -1,0 +1,196 @@
+package incident
+
+import (
+	"context"
+	"errors"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/dbx"
+)
+
+type IncidentRepository struct {
+	pool *pgxpool.Pool
+}
+
+// --- Dispatch-facing seams ---------------------------------------------------
+//
+// The dispatch module drives an incident's status as units are assigned and
+// complete, but it must not own the incidents table. These three methods are the
+// vocabulary it needs, expressed as intent rather than SQL, each taking the
+// caller's transaction so the whole reservation stays one atomic commit.
+
+// StatusTx reads an incident's current status inside the caller's transaction, so
+// dispatch can validate the incident is still dispatchable before reserving a unit.
+func (r *IncidentRepository) StatusTx(ctx context.Context, tx pgx.Tx, id string) (string, error) {
+	var status string
+	err := tx.QueryRow(ctx, `SELECT status FROM incidents WHERE id = $1::uuid`, id).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrIncidentNotFound
+	}
+	return status, err
+}
+
+// MarkDispatchedTx promotes an incident to dispatched.
+//
+// The WHERE guard makes it IDEMPOTENT: one incident can hold many dispatches, so
+// the second and third units assigned to it must not fail or clobber a later
+// status. Guarding on the source states means "promote only if still un-dispatched"
+// without the caller needing to check first (which would be a check-then-act race).
+func (r *IncidentRepository) MarkDispatchedTx(ctx context.Context, tx pgx.Tx, id string) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE incidents SET status = 'dispatched', updated_at = now()
+		 WHERE id = $1::uuid AND status IN ('reported','verified')`, id)
+	return err
+}
+
+// ResolveIfDispatchedTx closes an incident once its last active dispatch completes.
+// Guarded on 'dispatched' so a cancelled or already-resolved incident is untouched.
+func (r *IncidentRepository) ResolveIfDispatchedTx(ctx context.Context, tx pgx.Tx, id string) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE incidents SET status = 'resolved', updated_at = now()
+		 WHERE id = $1::uuid AND status = 'dispatched'`, id)
+	return err
+}
+
+func NewIncidentRepository(pool *pgxpool.Pool) *IncidentRepository {
+	return &IncidentRepository{pool: pool}
+}
+
+// incidentColumns is the shared projection. ST_X = longitude, ST_Y = latitude —
+// the column ORDER here must match scanIncident's Scan order exactly.
+const incidentColumns = `id::text, reporter_id::text, title, description, severity, status, report_count,
+	ST_X(location) AS longitude, ST_Y(location) AS latitude, created_at, updated_at`
+
+func scanIncident(s dbx.Scanner, inc *Incident) error {
+	return s.Scan(
+		&inc.ID, &inc.ReporterID, &inc.Title, &inc.Description,
+		&inc.Severity, &inc.Status, &inc.ReportCount, &inc.Longitude, &inc.Latitude,
+		&inc.CreatedAt, &inc.UpdatedAt,
+	)
+}
+
+// Create inserts an incident. The location is built from lng/lat via ST_MakePoint
+// — NOTE the argument order is ($lng, $lat): X then Y. status defaults to
+// 'reported' in the DB. Fills in the generated fields via RETURNING.
+func (r *IncidentRepository) Create(ctx context.Context, inc *Incident) error {
+	const q = `
+		INSERT INTO incidents (reporter_id, title, description, severity, location)
+		VALUES ($1::uuid, $2, $3, $4, ST_SetSRID(ST_MakePoint($5, $6), 4326))
+		RETURNING id::text, status, report_count, created_at, updated_at`
+	return r.pool.QueryRow(ctx, q,
+		inc.ReporterID, inc.Title, inc.Description, inc.Severity,
+		inc.Longitude, inc.Latitude, // $5 = lng, $6 = lat
+	).Scan(&inc.ID, &inc.Status, &inc.ReportCount, &inc.CreatedAt, &inc.UpdatedAt)
+}
+
+// GetByID returns one incident. Returns pgx.ErrNoRows if not found (the service
+// translates that to a domain not-found error).
+func (r *IncidentRepository) GetByID(ctx context.Context, id string) (*Incident, error) {
+	const q = `SELECT ` + incidentColumns + ` FROM incidents WHERE id = $1::uuid`
+	var inc Incident
+	if err := scanIncident(r.pool.QueryRow(ctx, q, id), &inc); err != nil {
+		return nil, err
+	}
+	return &inc, nil
+}
+
+// List returns incidents newest-first, paginated.
+func (r *IncidentRepository) List(ctx context.Context, limit, offset int) ([]Incident, error) {
+	const q = `SELECT ` + incidentColumns + ` FROM incidents ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+	rows, err := r.pool.Query(ctx, q, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Incident, 0, limit)
+	for rows.Next() {
+		var inc Incident
+		if err := scanIncident(rows, &inc); err != nil {
+			return nil, err
+		}
+		out = append(out, inc)
+	}
+	return out, rows.Err()
+}
+
+// UpdateStatus sets a new status (the caller/service has already validated the
+// transition) and returns the updated row.
+func (r *IncidentRepository) UpdateStatus(ctx context.Context, id, status string) (*Incident, error) {
+	const q = `
+		UPDATE incidents SET status = $1, updated_at = now()
+		WHERE id = $2::uuid
+		RETURNING ` + incidentColumns
+	var inc Incident
+	if err := scanIncident(r.pool.QueryRow(ctx, q, status, id), &inc); err != nil {
+		return nil, err
+	}
+	return &inc, nil
+}
+
+// FindWithinRadius returns incidents within radiusMeters of (lat,lng), nearest
+// first, each with DistanceMeters populated.
+//
+// The WHERE uses ST_DWithin(location::geography, point::geography, meters) — this
+// is what the GiST index on (location::geography) accelerates. ST_Distance in the
+// SELECT gives the exact metric distance for display/sorting. Params: $1=lng,
+// $2=lat (ST_MakePoint is X,Y = lng,lat), $3=radius(m), $4=limit.
+func (r *IncidentRepository) FindWithinRadius(ctx context.Context, lat, lng, radiusMeters float64, limit int) ([]Incident, error) {
+	const q = `
+		SELECT ` + incidentColumns + `,
+		       ST_Distance(location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS distance_m
+		FROM incidents
+		WHERE ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
+		ORDER BY distance_m
+		LIMIT $4`
+	rows, err := r.pool.Query(ctx, q, lng, lat, radiusMeters, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Incident, 0)
+	for rows.Next() {
+		var inc Incident
+		if err := rows.Scan(
+			&inc.ID, &inc.ReporterID, &inc.Title, &inc.Description,
+			&inc.Severity, &inc.Status, &inc.ReportCount, &inc.Longitude, &inc.Latitude,
+			&inc.CreatedAt, &inc.UpdatedAt, &inc.DistanceMeters,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, inc)
+	}
+	return out, rows.Err()
+}
+
+// TryDedupe looks for an ACTIVE incident reported within windowMinutes and
+// radiusMeters of (lat,lng); if found, it increments that incident's report_count
+// and returns it. Returns pgx.ErrNoRows when there is no duplicate (caller then
+// creates a new incident).
+//
+// It is ONE statement — the SELECT (find nearest active recent match) and the
+// UPDATE (increment) happen together, which shrinks the check-then-act race
+// versus doing them as two round-trips. The residual race (two concurrent FIRST
+// reports both finding no match) is inherent to check-then-insert; see P13.
+// Params: $1=lng, $2=lat, $3=windowMinutes, $4=radiusMeters.
+func (r *IncidentRepository) TryDedupe(ctx context.Context, lat, lng, radiusMeters float64, windowMinutes int) (*Incident, error) {
+	const q = `
+		UPDATE incidents SET report_count = report_count + 1, updated_at = now()
+		WHERE id = (
+			SELECT id FROM incidents
+			WHERE status IN ('reported', 'verified', 'dispatched')
+			  AND created_at > now() - make_interval(mins => $3)
+			  AND ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $4)
+			ORDER BY location::geography <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+			LIMIT 1
+		)
+		RETURNING ` + incidentColumns
+	var inc Incident
+	if err := scanIncident(r.pool.QueryRow(ctx, q, lng, lat, windowMinutes, radiusMeters), &inc); err != nil {
+		return nil, err
+	}
+	return &inc, nil
+}

@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AtharvGupta360/CrisisLink/internal/common"
-	"github.com/AtharvGupta360/CrisisLink/internal/config"
-	"github.com/AtharvGupta360/CrisisLink/internal/database"
+	"github.com/AtharvGupta360/CrisisLink/internal/outbox"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/config"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/database"
 	"github.com/AtharvGupta360/CrisisLink/internal/relay"
-	"github.com/AtharvGupta360/CrisisLink/internal/repository"
 )
 
 func main() {
@@ -36,7 +36,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	outbox := repository.NewOutboxRepository(pool)
+	outbox := outbox.NewOutboxRepository(pool)
 
 	// Make sure the topic exists before we start publishing.
 	if err := relay.EnsureTopic(cfg.Kafka.Brokers, cfg.Kafka.Topic, 1); err != nil {

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/AtharvGupta360/CrisisLink/internal/models"
+	"github.com/AtharvGupta360/CrisisLink/internal/unit"
 )
 
 // eps is the float tolerance for comparisons — floats are never exactly equal.
@@ -13,15 +13,16 @@ const eps = 1e-9
 
 func almostEqual(a, b float64) bool { return math.Abs(a-b) < eps }
 
-// unit is a tiny constructor so the table stays readable.
-func unit(typ string, dist float64) *models.Unit {
-	return &models.Unit{Type: typ, Status: models.UnitAvailable, DistanceMeters: dist}
+// mkUnit is a tiny constructor so the table stays readable. Named mkUnit, not
+// unit, because `unit` is now the package name after the modular split.
+func mkUnit(typ string, dist float64) *unit.Unit {
+	return &unit.Unit{Type: typ, Status: unit.UnitAvailable, DistanceMeters: dist}
 }
 
 func TestScore(t *testing.T) {
 	tests := []struct {
 		name          string
-		unit          *models.Unit
+		unit          *unit.Unit
 		preferredType string
 		wantProx      float64 // expected proximity component (pre-weight)
 		wantTypeMatch float64 // expected type-match component (pre-weight)
@@ -29,7 +30,7 @@ func TestScore(t *testing.T) {
 	}{
 		{
 			name:          "on top of the incident, no preference => perfect",
-			unit:          unit(models.UnitTypeAmbulance, 0),
+			unit:          mkUnit(unit.UnitTypeAmbulance, 0),
 			preferredType: "",
 			wantProx:      1.0,
 			wantTypeMatch: 1.0,
@@ -37,7 +38,7 @@ func TestScore(t *testing.T) {
 		},
 		{
 			name:          "halfway to falloff, no preference",
-			unit:          unit(models.UnitTypeFire, 5000),
+			unit:          mkUnit(unit.UnitTypeFire, 5000),
 			preferredType: "",
 			wantProx:      0.5,
 			wantTypeMatch: 1.0,
@@ -45,23 +46,23 @@ func TestScore(t *testing.T) {
 		},
 		{
 			name:          "preferred type gets full type-match",
-			unit:          unit(models.UnitTypeAmbulance, 2000),
-			preferredType: models.UnitTypeAmbulance,
+			unit:          mkUnit(unit.UnitTypeAmbulance, 2000),
+			preferredType: unit.UnitTypeAmbulance,
 			wantProx:      0.8,
 			wantTypeMatch: 1.0,
 			wantScore:     0.70*0.8 + 0.30*1.0, // 0.86
 		},
 		{
 			name:          "wrong type gets partial credit, not zero",
-			unit:          unit(models.UnitTypeFire, 2000),
-			preferredType: models.UnitTypeAmbulance,
+			unit:          mkUnit(unit.UnitTypeFire, 2000),
+			preferredType: unit.UnitTypeAmbulance,
 			wantProx:      0.8,
 			wantTypeMatch: partialTypeMatch,
 			wantScore:     0.70*0.8 + 0.30*partialTypeMatch, // 0.65
 		},
 		{
 			name:          "beyond falloff => proximity clamps to 0",
-			unit:          unit(models.UnitTypeRescue, 15000),
+			unit:          mkUnit(unit.UnitTypeRescue, 15000),
 			preferredType: "",
 			wantProx:      0.0,
 			wantTypeMatch: 1.0,
@@ -89,11 +90,11 @@ func TestScore(t *testing.T) {
 // preferred-type unit slightly farther away should outrank a closer wrong-type
 // unit. This is the behavior that justifies scoring over raw nearest-first.
 func TestScore_PreferredTypeCanOvertakeCloserUnit(t *testing.T) {
-	closerWrongType := unit(models.UnitTypeFire, 500)       // very close, wrong kind
-	fartherRightType := unit(models.UnitTypeAmbulance, 900) // a bit farther, ideal kind
+	closerWrongType := mkUnit(unit.UnitTypeFire, 500)       // very close, wrong kind
+	fartherRightType := mkUnit(unit.UnitTypeAmbulance, 900) // a bit farther, ideal kind
 
-	sClose, _ := Score(closerWrongType, models.UnitTypeAmbulance)
-	sFar, _ := Score(fartherRightType, models.UnitTypeAmbulance)
+	sClose, _ := Score(closerWrongType, unit.UnitTypeAmbulance)
+	sFar, _ := Score(fartherRightType, unit.UnitTypeAmbulance)
 
 	if sFar <= sClose {
 		t.Fatalf("expected preferred-type unit (%.4f) to outrank closer wrong-type unit (%.4f)", sFar, sClose)
@@ -103,8 +104,8 @@ func TestScore_PreferredTypeCanOvertakeCloserUnit(t *testing.T) {
 // TestScore_NoPreferenceIsPureProximity confirms that with no preferred type,
 // ranking collapses to nearest-first (type is neutral).
 func TestScore_NoPreferenceIsPureProximity(t *testing.T) {
-	near := unit(models.UnitTypeFire, 100)
-	far := unit(models.UnitTypeAmbulance, 3000)
+	near := mkUnit(unit.UnitTypeFire, 100)
+	far := mkUnit(unit.UnitTypeAmbulance, 3000)
 
 	sNear, _ := Score(near, "")
 	sFar, _ := Score(far, "")
@@ -117,14 +118,14 @@ func TestScore_NoPreferenceIsPureProximity(t *testing.T) {
 // TestScoredUnitSortIsDescending is a small guard on the ordering contract the
 // service relies on: sorting ScoredUnits by Score descending puts the best first.
 func TestScoredUnitSortIsDescending(t *testing.T) {
-	units := []*models.Unit{
-		unit(models.UnitTypeFire, 500),
-		unit(models.UnitTypeAmbulance, 900),
-		unit(models.UnitTypeRescue, 4000),
+	units := []*unit.Unit{
+		mkUnit(unit.UnitTypeFire, 500),
+		mkUnit(unit.UnitTypeAmbulance, 900),
+		mkUnit(unit.UnitTypeRescue, 4000),
 	}
 	scored := make([]ScoredUnit, 0, len(units))
 	for _, u := range units {
-		s, bd := Score(u, models.UnitTypeAmbulance)
+		s, bd := Score(u, unit.UnitTypeAmbulance)
 		scored = append(scored, ScoredUnit{Unit: *u, Score: s, Breakdown: bd})
 	}
 	sort.SliceStable(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })

@@ -6,7 +6,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/AtharvGupta360/CrisisLink/internal/config"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/config"
 )
 
 // Claims is our JWT payload: the standard registered claims (exp, iat) plus the
