@@ -19,6 +19,7 @@ type Config struct {
 	Redis    RedisConfig    `mapstructure:"redis"`
 	CORS     CORSConfig     `mapstructure:"cors"`
 	Kafka    KafkaConfig    `mapstructure:"kafka"`
+	Gateway  GatewayConfig  `mapstructure:"gateway"`
 }
 
 type ServerConfig struct {
@@ -67,6 +68,21 @@ type KafkaConfig struct {
 	DLQTopic string   `mapstructure:"dlqTopic"` // messages that exhausted retries (P22)
 }
 
+// GatewayConfig configures the standalone edge reverse proxy (cmd/gateway). It is
+// used ONLY by that binary; the api server ignores it. Upstreams is the list of
+// api replica base URLs the gateway load-balances across — the whole reason the
+// gateway exists is that a client never needs to know how many there are.
+type GatewayConfig struct {
+	ListenAddr string   `mapstructure:"listenAddr"` // edge address clients hit, e.g. ":8000"
+	Upstreams  []string `mapstructure:"upstreams"`  // api replicas, e.g. ["http://127.0.0.1:8080","http://127.0.0.1:8081"]
+	// EdgeAuth turns on COARSE authentication at the edge: a JWT signature+expiry
+	// check that sheds unauthenticated traffic before it reaches any replica. Off
+	// by default so the simple single-process dev path stays frictionless. Note
+	// this is authN only — authorization (RBAC) stays in the app, because which
+	// role may hit which route is domain knowledge the gateway does not have.
+	EdgeAuth bool `mapstructure:"edgeAuth"`
+}
+
 type CORSConfig struct {
 	AllowedOrigins   []string `mapstructure:"allowedOrigins"`
 	AllowedMethods   []string `mapstructure:"allowedMethods"`
@@ -112,6 +128,10 @@ func LoadConfig(path string) (*Config, error) {
 	viper.SetDefault("kafka.brokers", []string{"localhost:9092"})
 	viper.SetDefault("kafka.topic", "crisislink.events")
 	viper.SetDefault("kafka.dlqTopic", "crisislink.events.dlq")
+
+	viper.SetDefault("gateway.listenAddr", ":8000")
+	viper.SetDefault("gateway.upstreams", []string{"http://127.0.0.1:8080"})
+	viper.SetDefault("gateway.edgeAuth", false)
 
 	viper.SetDefault("cors.allowedOrigins", []string{"http://localhost:3000", "http://localhost:5173"})
 	viper.SetDefault("cors.allowedMethods", []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"})

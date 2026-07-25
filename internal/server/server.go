@@ -41,24 +41,33 @@ import (
 func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.Engine {
 	gin.SetMode(cfg.Server.Mode)
 
+	// This replica's identity, stamped on every response so load-balancing across
+	// replicas is observable. Prefer an explicit REPLICA_ID (a pod name in k8s);
+	// fall back to the port so two local `go run`s on different ports are still
+	// distinguishable.
+	replicaID := os.Getenv("REPLICA_ID")
+	if replicaID == "" {
+		replicaID = fmt.Sprintf("api-%d", cfg.Server.Port)
+	}
+
 	// gin.New() (bare) not gin.Default() — we own the chain explicitly. Order
 	// matters: CORS first (answer/reject cross-origin before doing any work),
-	// request-id next (so everything downstream can log it), rate-limit (cheaply
-	// shed abusive traffic early), recovery (catch panics), logging last.
+	// request-id next (so everything downstream can log it), recovery (catch
+	// panics), logging last.
+	//
+	// NOTE: rate limiting is deliberately NOT here. It is an EDGE concern and lives
+	// in the gateway (cmd/gateway), so abusive traffic is shed once, before it fans
+	// out to every replica — rather than each replica re-checking (and, if the
+	// bucket were per-process, N replicas granting N times the intended limit). The
+	// limiter is still Redis-backed there, so the limit stays global across gateway
+	// instances too.
 	r := gin.New()
 	r.Use(
 		middleware.CORS(&cfg.CORS),
 		middleware.RequestID(),
-		// Early, so the timer spans every middleware below it: latency the client
-		// feels includes time spent being rate-limited or rejected.
+		middleware.ServedBy(replicaID),
+		// Early, so the timer spans every middleware below it.
 		middleware.Metrics(),
-		// Rate limit state lives in REDIS, not in this process's memory, so the
-		// limit holds across every API replica (an in-process map would give each
-		// replica its own private budget). Token bucket, evaluated atomically.
-		middleware.RedisRateLimiter(rdb, middleware.RedisRateLimiterConfig{
-			RequestsPerSecond: 10, // sustained per-IP rate
-			BurstSize:         20, // tolerate short spikes
-		}),
 		middleware.Recovery(),
 		middleware.RequestLogger(),
 	)

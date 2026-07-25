@@ -29,6 +29,14 @@ redis:
   password: ""
   db: 0
 
+# Edge reverse proxy (cmd/gateway). Read ONLY by the gateway binary; the api ignores it.
+gateway:
+  listenAddr: ":8000"                 # clients hit the gateway here
+  upstreams:                          # api replicas the gateway round-robins across
+    - "http://127.0.0.1:8080"
+    - "http://127.0.0.1:8081"
+  edgeAuth: false                     # true = reject unauthenticated traffic at the edge (authN only; RBAC stays in the app)
+
 cors:
   allowedOrigins: ["http://localhost:3000", "http://localhost:5173"]
   allowedMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
