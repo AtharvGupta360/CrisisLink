@@ -17,6 +17,9 @@ vendor/
 
 # Learning / design docs — kept local, pushed only when the project is complete
 *.md
+# ...except the README, which IS the repo's front page: a README that is not in the
+# repository cannot be rendered by GitHub, which defeats its only purpose.
+!README.md
 
 # Claude Code local (personal) settings — never published
 .claude/settings.local.json
