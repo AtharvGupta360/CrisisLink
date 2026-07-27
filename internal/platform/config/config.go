@@ -6,6 +6,8 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -158,10 +160,44 @@ func LoadConfig(path string) (*Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+
+	applyPlatformEnv(&cfg)
+
 	if err := cfg.validateSecrets(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// applyPlatformEnv folds in the conventions used by container platforms (Render,
+// Railway, Heroku, Cloud Run), which viper's key mapping cannot express.
+//
+// Two things need it:
+//
+//	PORT         every PaaS assigns the listen port at runtime and expects the
+//	             process to bind exactly that. Binding anything else means the
+//	             health check never passes and the deploy is rolled back.
+//	CORS_ORIGINS viper's AutomaticEnv cannot turn one env var into a []string, so
+//	             a comma-separated list is parsed explicitly. Without this the
+//	             deployed frontend's origin cannot be allowed at all, and every
+//	             browser call fails preflight.
+func applyPlatformEnv(cfg *Config) {
+	if p := os.Getenv("PORT"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			cfg.Server.Port = n
+		}
+	}
+	if o := os.Getenv("CORS_ORIGINS"); o != "" {
+		var origins []string
+		for _, part := range strings.Split(o, ",") {
+			if s := strings.TrimSpace(part); s != "" {
+				origins = append(origins, s)
+			}
+		}
+		if len(origins) > 0 {
+			cfg.CORS.AllowedOrigins = origins
+		}
+	}
 }
 
 // devJWTSecret is the placeholder shipped in the repo so a fresh clone runs. It is

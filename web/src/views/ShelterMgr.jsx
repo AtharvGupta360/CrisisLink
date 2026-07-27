@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { api, fmtAgo } from '../api.js';
+import { api, fmtAgo, POLL_MS } from '../api.js';
 import { TopBar, useToast } from '../App.jsx';
 
 export default function ShelterMgr({ claims, onLogout }) {
@@ -28,7 +28,7 @@ export default function ShelterMgr({ claims, onLogout }) {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 6000);
+    const t = setInterval(load, POLL_MS);
     return () => clearInterval(t);
   }, [load]);
 

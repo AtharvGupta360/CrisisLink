@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { api, fmtMeters, fmtEta, fmtAgo, ApiError } from '../api.js';
+import { api, fmtMeters, fmtEta, fmtAgo, POLL_MS } from '../api.js';
 import MapView from '../components/MapView.jsx';
 import { TopBar, useToast } from '../App.jsx';
 
@@ -127,7 +127,7 @@ export default function Operator({ claims, onLogout }) {
       loadUnits();
       loadLag();
       if (selectedRef.current) loadCandidates(selectedRef.current.id, true); // quiet
-    }, 4000);
+    }, POLL_MS);
     return () => clearInterval(t);
   }, [loadUnits, loadLag, loadCandidates]);
 

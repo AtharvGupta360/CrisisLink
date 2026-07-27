@@ -5,6 +5,11 @@
 const BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 const API = `${BASE}/api/v1`;
 
+// How often the live views re-poll. Deliberately slower in production: the demo
+// runs on a free shared-CPU instance behind a 10 req/s edge rate limit, and every
+// open tab costs ~1 req/s. Locally, 4s makes units visibly move while you watch.
+export const POLL_MS = import.meta.env.PROD ? 10000 : 4000;
+
 const TOKEN_KEY = 'crisislink.token';
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);

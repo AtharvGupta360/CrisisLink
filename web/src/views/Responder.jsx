@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { api, fmtMeters, fmtAgo } from '../api.js';
+import { api, fmtAgo, POLL_MS } from '../api.js';
 import MapView from '../components/MapView.jsx';
 import { TopBar, useToast } from '../App.jsx';
 
@@ -101,7 +101,7 @@ export default function Responder({ claims, onLogout }) {
     const t = setInterval(() => {
       loadAssignment();
       loadPresence();
-    }, 5000);
+    }, POLL_MS);
     return () => clearInterval(t);
   }, [loadUnit, loadAssignment, loadPresence]);
 

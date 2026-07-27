@@ -39,11 +39,14 @@ WORKDIR /app
 # Copy every binary; which one runs is chosen by the compose/k8s command, so one
 # image serves the api, relay, consumer and gateway — they share a codebase.
 COPY --from=build /out/ /app/
+COPY docker-entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # Run as a non-root user. A compromised process should not be root inside the
 # container; this is defense in depth that costs nothing.
 USER crisislink
 
-# The api is the default entrypoint; other services override `command`.
+# Default: migrate then serve the API. Other services override the entrypoint
+# (e.g. `--entrypoint /app/relay`), which is why every binary ships in the image.
 EXPOSE 8080
-ENTRYPOINT ["/app/server"]
+ENTRYPOINT ["/app/entrypoint.sh"]

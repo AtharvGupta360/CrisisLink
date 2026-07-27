@@ -5,11 +5,14 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
 
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/common"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/config"
 	"github.com/AtharvGupta360/CrisisLink/internal/platform/database"
+	"github.com/AtharvGupta360/CrisisLink/internal/platform/seed"
 	"github.com/AtharvGupta360/CrisisLink/internal/server"
 )
 
@@ -41,6 +44,17 @@ func main() {
 	}
 	defer rdb.Close()
 	common.Logger.Info("redis ready")
+
+	// Demo seeding, gated behind an explicit env flag so it can never fire by
+	// accident. It exists because a managed database has no shell to run the
+	// seeding script against. Idempotent, so restarts on an ephemeral free-tier
+	// instance don't duplicate anything.
+	if os.Getenv("DEMO_SEED") == "true" {
+		if err := seed.Run(context.Background(), pool); err != nil {
+			// Seeding is a convenience, never a reason to refuse traffic.
+			common.Logger.Errorw("demo seed failed", "error", err)
+		}
+	}
 
 	router := server.NewServer(cfg, pool, rdb)
 	if err := server.Run(router, cfg); err != nil {

@@ -6,6 +6,10 @@ docs/
 deploy/
 test/
 scripts/
+# The frontend is a SEPARATE deployable (Vercel) and never belongs in the Go
+# image. Without this, web/node_modules — tens of thousands of files — is
+# uploaded into the build context on every build.
+web/
 config.yaml          # real secrets live here (gitignored); never bake into an image
 *.log
 .claude/

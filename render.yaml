@@ -1,0 +1,90 @@
+# Render blueprint — provisions the API, Postgres/PostGIS and Redis together.
+#
+#   Render dashboard -> New -> Blueprint -> pick this repo
+#
+# WHAT IS AND IS NOT DEPLOYED, stated plainly:
+#
+#   deployed      API + Postgres/PostGIS + Redis
+#                 -> incidents, geospatial dispatch, presence, RBAC, shelters,
+#                    transport all work end to end.
+#
+#   NOT deployed  relay + consumers (the Kafka pipeline). There is no free managed
+#                 Kafka, and running the relay without a broker would retry and
+#                 dead-letter every event. Outbox rows simply accumulate unpublished,
+#                 which is exactly the behaviour the outbox pattern is designed for:
+#                 the API stays correct and nothing is lost, delivery is just
+#                 deferred. The pipeline runs locally via docker compose.
+#
+# The free Postgres instance is deleted by Render after 30 days — re-create it and
+# re-run migrations if the demo goes cold.
+
+services:
+  - type: web
+    name: crisislink-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore # closest region to India; lower RTT for the demo
+    healthCheckPath: /health # liveness only, no DB dependency — see server.go
+    envVars:
+      # release mode turns on the JWT-secret fail-fast. A weak secret will refuse
+      # to boot rather than serve forgeable tokens.
+      - key: SERVER_MODE
+        value: release
+      # Render assigns the port at runtime; applyPlatformEnv() reads $PORT.
+      - key: PORT
+        value: 10000
+      - key: JWT_SECRETKEY
+        generateValue: true # Render mints a strong random value and keeps it secret
+      - key: JWT_EXPIRYHOURS
+        value: 24
+
+      - key: DATABASE_HOST
+        fromDatabase: { name: crisislink-db, property: host }
+      - key: DATABASE_PORT
+        fromDatabase: { name: crisislink-db, property: port }
+      - key: DATABASE_USER
+        fromDatabase: { name: crisislink-db, property: user }
+      - key: DATABASE_PASSWORD
+        fromDatabase: { name: crisislink-db, property: password }
+      - key: DATABASE_DBNAME
+        fromDatabase: { name: crisislink-db, property: database }
+      # Managed Postgres requires TLS; the local default of `disable` would be
+      # rejected outright.
+      - key: DATABASE_SSLMODE
+        value: require
+      # The free instance is small — a large pool would exhaust its connection
+      # limit long before the app is the bottleneck.
+      - key: DATABASE_MAXCONNS
+        value: 5
+
+      - key: REDIS_HOST
+        fromService: { name: crisislink-redis, type: keyvalue, property: host }
+      - key: REDIS_PORT
+        fromService: { name: crisislink-redis, type: keyvalue, property: port }
+
+      # Comma-separated; parsed by applyPlatformEnv(). Set the real Vercel URL
+      # here after the frontend's first deploy, or the browser blocks every call.
+      - key: CORS_ORIGINS
+        sync: false
+
+      # Creates the five public demo accounts and fixtures on boot. Idempotent.
+      # ONLY safe because this database holds nothing real — these accounts share
+      # a published password.
+      - key: DEMO_SEED
+        value: "true"
+
+  - type: keyvalue
+    name: crisislink-redis
+    plan: free
+    region: singapore
+    # Presence keys and rate-limit buckets are both disposable, so eviction under
+    # memory pressure is acceptable — Postgres remains the source of truth.
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: [] # reachable only from inside Render's private network
+
+databases:
+  - name: crisislink-db
+    plan: free
+    region: singapore
+    postgresMajorVersion: "16"
