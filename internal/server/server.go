@@ -174,6 +174,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, rdb *redis.Client) *gin.E
 	// caller's identity on the context. Everything in this group needs a token.
 	protected := api.Group("")
 	protected.Use(middleware.AuthRequired(&cfg.JWT))
+	// Every :id in this API is a UUID. Validating once here means a malformed id
+	// is a 404 on every route — including ones added later — instead of escaping
+	// as a Postgres 22P02 cast error and surfacing as a 500.
+	protected.Use(middleware.ValidateUUIDParam("id"))
 	{
 		// /me echoes the identity carried by the token — proof the JWT round-trips.
 		protected.GET("/me", func(c *gin.Context) {

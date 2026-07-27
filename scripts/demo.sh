@@ -31,16 +31,20 @@ TOKEN=$(curl -s -X POST "$BASE/auth/login" -H 'Content-Type: application/json' \
 AUTH="Authorization: Bearer $TOKEN"
 echo "authenticated as $U (admin)"
 
+# Call signs are UNIQUE, and the race below leaves a unit reserved. So a fixed
+# name like DEMO-1 makes this script run exactly once: the second run gets a 409
+# on creation and then finds nothing available. A per-run suffix keeps the demo
+# repeatable, which matters because you will run it many times.
+RUN="$RANDOM"
+UNIT=""
 for i in 1 2 3; do
-  curl -s -X POST "$BASE/units" -H "$AUTH" -H 'Content-Type: application/json' \
-    -d "{\"callSign\":\"DEMO-$i\",\"type\":\"ambulance\",\"latitude\":28.61$i,\"longitude\":77.20$i}" > /dev/null
+  id=$(curl -s -X POST "$BASE/units" -H "$AUTH" -H 'Content-Type: application/json' \
+    -d "{\"callSign\":\"DEMO-$RUN-$i\",\"type\":\"ambulance\",\"latitude\":28.61$i,\"longitude\":77.20$i}" \
+    | python -c "import sys,json;print(json.load(sys.stdin)['data']['id'])" 2>/dev/null)
+  [ -z "$UNIT" ] && UNIT="$id"
 done
-# Pick an AVAILABLE unit — a fleet accumulated over time contains reserved and
-# out-of-service vehicles, and dispatching those would (correctly) be refused.
-UNIT=$(curl -s "$BASE/units?status=available" -H "$AUTH" \
-  | python -c "import sys,json;u=json.load(sys.stdin)['data'];print(u[0]['id'] if u else '')")
-[ -z "$UNIT" ] && { echo "no available unit found; aborting"; exit 1; }
-echo "registered 3 ambulances (demo unit: ${UNIT:0:8}...)"
+[ -z "$UNIT" ] && { echo "could not register a demo unit; is the API up?"; exit 1; }
+echo "registered 3 ambulances (demo unit: DEMO-$RUN-1)"
 pause
 
 # ---------------------------------------------------------------- 1. dedupe
