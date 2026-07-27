@@ -26,6 +26,17 @@ services:
     plan: free
     region: singapore # closest region to India; lower RTT for the demo
     healthCheckPath: /health # liveness only, no DB dependency — see server.go
+    # Don't rebuild the Go image for changes that cannot affect it. The frontend
+    # is deployed separately by Vercel, so a CSS tweak would otherwise burn free
+    # build minutes AND take the API down for a cold rebuild for no reason.
+    buildFilter:
+      ignoredPaths:
+        - "web/**"
+        - "docs/**"
+        - "scripts/**"
+        - "deploy/**"
+        - "test/**"
+        - "**/*.md"
     envVars:
       # release mode turns on the JWT-secret fail-fast. A weak secret will refuse
       # to boot rather than serve forgeable tokens.

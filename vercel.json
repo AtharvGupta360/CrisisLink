@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "//": "Repo-root Vercel config. The frontend lives in web/, but Vercel builds from the repository root when deploying from Git — so the build is pointed into that subdirectory here rather than via a dashboard setting, keeping the deployment reproducible from the repo alone.",
+  "framework": null,
+  "installCommand": "npm install --prefix web",
+  "buildCommand": "npm run build --prefix web",
+  "outputDirectory": "web/dist",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}
