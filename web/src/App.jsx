@@ -43,7 +43,7 @@ export default function App() {
   useEffect(() => {
     const onUnauthorized = () => {
       setTokenState(null);
-      toast('Session expired — please sign in again', 'err');
+      toast('Session expired. Please sign in again.', 'err');
     };
     window.addEventListener('crisislink:unauthorized', onUnauthorized);
     return () => window.removeEventListener('crisislink:unauthorized', onUnauthorized);

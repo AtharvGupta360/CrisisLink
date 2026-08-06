@@ -63,7 +63,7 @@ export default function Citizen({ claims, onLogout }) {
       // The API tells you when your report was MERGED into an existing incident
       // rather than creating a new one — geo-deduplication, surfaced to the user.
       if (created.reportCount > 1) {
-        toast(`Merged — ${created.reportCount} people have reported this`, 'ok');
+        toast(`Merged with an existing report. ${created.reportCount} people have reported this.`, 'ok');
       } else {
         toast('Report sent. Help is being coordinated.', 'ok');
       }
@@ -109,8 +109,8 @@ export default function Citizen({ claims, onLogout }) {
                 <div className="field">
                   <label htmlFor="s">How serious is it?</label>
                   <select id="s" value={severity} onChange={(e) => setSeverity(e.target.value)}>
-                    <option value="critical">Critical — lives at immediate risk</option>
-                    <option value="high">High — urgent</option>
+                    <option value="critical">Critical (lives at immediate risk)</option>
+                    <option value="high">High (urgent)</option>
                     <option value="medium">Medium</option>
                     <option value="low">Low</option>
                   </select>
@@ -122,7 +122,7 @@ export default function Citizen({ claims, onLogout }) {
                     placeholder="Two floors down, people inside" />
                 </div>
                 <button className="primary" disabled={busy}>
-                  {busy ? 'Sending…' : 'Send report'}
+                  {busy ? 'Sending...' : 'Send report'}
                 </button>
               </form>
             </div>

@@ -162,7 +162,7 @@ export default function Operator({ claims, onLogout }) {
     );
     const won = results.filter((r) => r.status === 'fulfilled').length;
     const lost = results.length - won;
-    toast(`RACE: ${won} × 201 won, ${lost} × 409 refused — ${target.unit.callSign}`, won === 1 ? 'ok' : 'err');
+    toast(`${target.unit.callSign}: ${won} won (201), ${lost} refused (409)`, won === 1 ? 'ok' : 'err');
     setRacing(false);
     await Promise.all([loadIncidents(), loadUnits()]);
     loadCandidates(selected.id);
@@ -247,7 +247,7 @@ export default function Operator({ claims, onLogout }) {
           <div className="rail-head">Dispatch candidates</div>
 
           {!selected && <div className="empty">Select an incident to rank units</div>}
-          {selected && loadingCands && !cands && <div className="empty">Scoring…</div>}
+          {selected && loadingCands && !cands && <div className="empty">Scoring...</div>}
 
           {selected && cands && (
             <>
@@ -258,7 +258,7 @@ export default function Operator({ claims, onLogout }) {
                 <div style={{ marginTop: 7 }} className="legend">
                   <span><i style={{ background: 'var(--accent)' }} />time</span>
                   <span><i style={{ background: '#6d5bd0' }} />skill</span>
-                  <span>source: {cands.positionSource || '—'}</span>
+                  <span>source: {cands.positionSource || '-'}</span>
                 </div>
               </div>
 
@@ -316,7 +316,7 @@ export default function Operator({ claims, onLogout }) {
       {/* ---- demo toolbar ---- */}
       <div className="toolbar">
         <button onClick={fireRace} disabled={!cands?.candidates?.length || racing}>
-          {racing ? 'Racing…' : '⚡ Fire 10 concurrent dispatches'}
+          {racing ? 'Racing...' : '⚡ Fire 10 concurrent dispatches'}
         </button>
         <button onClick={openPreempt} disabled={!selected}>👁 Preemptable</button>
         <button onClick={() => { loadIncidents(); loadUnits(); }}>↻ Refresh</button>
@@ -330,9 +330,9 @@ export default function Operator({ claims, onLogout }) {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>Preemptable units</h3>
             <p className="sub dim" style={{ fontSize: 12 }}>
-              Taking a unit means someone else stops receiving help. Only strictly
-              less-severe incidents can be preempted — which is what stops two equal
-              incidents taking a unit back and forth forever.
+              Taking a unit means someone else stops receiving help. Only incidents of
+              strictly lower severity can be preempted, so two equal incidents can never
+              take a unit back and forth.
             </p>
             {(preempt.preemptable || []).length === 0 ? (
               <div className="empty">Nothing less severe is currently assigned.</div>

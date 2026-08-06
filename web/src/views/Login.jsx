@@ -32,7 +32,7 @@ export default function Login({ onAuth }) {
       setErr(
         e2.status === 401
           ? 'Wrong email or password.'
-          : e2.message || 'Could not reach the API — is the server running on :8080?'
+          : e2.message || 'Could not reach the API. Is the server running on :8080?'
       );
     } finally {
       setBusy(false);
@@ -43,7 +43,7 @@ export default function Login({ onAuth }) {
     <div className="login-wrap">
       <form className="login" onSubmit={signIn}>
         <h1>Crisis<span style={{ color: 'var(--accent-ink)' }}>Link</span></h1>
-        <p className="tag">Disaster response &amp; relief coordination</p>
+        <p className="tag">Calamity response and relief coordination</p>
 
         {err && <div className="err">{err}</div>}
 
@@ -69,7 +69,7 @@ export default function Login({ onAuth }) {
           />
         </div>
         <button className="primary" style={{ width: '100%' }} disabled={busy}>
-          {busy ? 'Signing in…' : 'Sign in'}
+          {busy ? 'Signing in...' : 'Sign in'}
         </button>
 
         <div className="demo-accounts">

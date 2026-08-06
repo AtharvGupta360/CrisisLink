@@ -45,7 +45,7 @@ export default function Responder({ claims, onLogout }) {
   //
   // HONEST LIMITATION: there is no "my current assignment" endpoint, so this has
   // to search. The naive version issued one request PER dispatched incident on a
-  // 5s timer — an N+1 that grew with the size of the disaster, which is exactly
+  // 5s timer — an N+1 that grew with the size of the calamity, which is exactly
   // backwards. Two things bound it now: the requests run concurrently instead of
   // serially, and only the most recent MAX_SCAN dispatched incidents are checked.
   // A responder holds at most one active dispatch, so the first hit wins.
@@ -157,9 +157,9 @@ export default function Responder({ claims, onLogout }) {
             <div className="card">
               <h2>No unit assigned</h2>
               <p className="sub">
-                Your account is a responder but isn't bound to a unit yet. An admin
-                assigns the binding, and it travels inside your token — which is why
-                you can act for that unit and no other.
+                Your account is a responder but isn't bound to a unit yet. An admin sets
+                that binding and it travels inside your token, so you can only act for
+                your own unit.
               </p>
             </div>
           </div>
@@ -197,9 +197,9 @@ export default function Responder({ claims, onLogout }) {
               {broadcasting ? '■ Stop broadcasting' : '⦿ Start broadcasting'}
             </button>
             <p className="dim" style={{ fontSize: 11.5, lineHeight: 1.5, marginTop: 12 }}>
-              Sends a heartbeat every {HEARTBEAT_MS / 1000}s. The key lives {TTL_SECONDS}s —
-              three intervals — so two missed pings are tolerated before you're
-              treated as dark.
+              Sends a heartbeat every {HEARTBEAT_MS / 1000}s. The key lives {TTL_SECONDS}s,
+              which is three intervals, so two missed pings are tolerated before you
+              count as dark.
             </p>
 
             {presence ? (
@@ -216,7 +216,7 @@ export default function Responder({ claims, onLogout }) {
               </>
             ) : (
               <div style={{ marginTop: 14 }} className="dim">
-                No live key — you are invisible to dispatch. Stop broadcasting and
+                No live key, so you are invisible to dispatch. Stop broadcasting and
                 watch this happen {TTL_SECONDS}s later.
               </div>
             )}
@@ -225,10 +225,10 @@ export default function Responder({ claims, onLogout }) {
           <div className="rail-head">My unit</div>
           <div style={{ padding: 14 }} className="dim">
             <div style={{ marginBottom: 6 }}>
-              <b className="mono" style={{ color: 'var(--ink)' }}>{unit?.callSign || '—'}</b>
+              <b className="mono" style={{ color: 'var(--ink)' }}>{unit?.callSign || '-'}</b>
             </div>
-            <div>type · {unit?.type || '—'}</div>
-            <div>status · {unit?.status || '—'}</div>
+            <div>type · {unit?.type || '-'}</div>
+            <div>status · {unit?.status || '-'}</div>
           </div>
         </div>
 
@@ -266,8 +266,8 @@ export default function Responder({ claims, onLogout }) {
 
               <p className="dim" style={{ fontSize: 11, lineHeight: 1.5, marginTop: 14 }}>
                 Completing frees your unit and resolves the incident in the same
-                transaction — the cascade is guarded in SQL, so an already-cancelled
-                incident is never resurrected.
+                transaction. The cascade is guarded in SQL, so an incident that was
+                already cancelled is never brought back.
               </p>
             </div>
           )}

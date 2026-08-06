@@ -125,17 +125,17 @@ export const api = {
 
 // Distance/ETA formatters shared by every view.
 export const fmtMeters = (m) =>
-  m == null ? '—' : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
+  m == null ? '-' : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
 
 export const fmtEta = (s) => {
-  if (s == null) return '—';
+  if (s == null) return '-';
   const mins = Math.floor(s / 60);
   const secs = Math.round(s % 60);
   return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
 };
 
 export const fmtAgo = (iso) => {
-  if (!iso) return '—';
+  if (!iso) return '-';
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
   if (diff < 60) return `${Math.round(diff)}s ago`;
   if (diff < 3600) return `${Math.round(diff / 60)}m ago`;

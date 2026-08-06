@@ -5,6 +5,19 @@ citizens reporting geolocated emergencies and the scarce rescue resources that
 respond, making dispatch decisions that are **fast, explainable, and impossible to
 corrupt under concurrency.**
 
+### ▶ [Live demo — crisislink-console.vercel.app](https://crisislink-console.vercel.app)
+
+Four one-click demo roles, no signup. Sign in as an **operator** to see live
+geospatial dispatch with explainable scoring; as a **responder** to broadcast a
+position and watch it move on the operator's map.
+
+> Hosted on free tiers, so the first request may take ~50s to wake the API. The
+> Kafka pipeline (relay + consumers) is not deployed — there is no free managed
+> Kafka — so outbox events accumulate unpublished, which is precisely the
+> behaviour the outbox pattern exists to provide. It runs locally via compose.
+
+---
+
 The hard part isn't CRUD. A rescue unit is a *physical, exclusive* resource: one
 ambulance cannot be sent to two emergencies. Everything here is built around making
 that impossible, and around never losing an event when a downstream system fails.
@@ -143,6 +156,21 @@ curl localhost:8080/health
 Config precedence: defaults < `config.yaml` < environment variables
 (e.g. `DATABASE_PASSWORD`, `SERVER_PORT`). In release mode the app **refuses to
 boot** on a default JWT secret.
+
+### Demo accounts
+
+The console seeds five accounts (`DEMO_SEED=true`), all with password
+`password123` — deliberately public, since the data is disposable:
+
+| Email | Role | What that role can see |
+|---|---|---|
+| `citizen@crisislink.dev` | citizen | Report an emergency, track your own reports |
+| `responder@crisislink.dev` | responder | Your assignment, advance its status, broadcast position |
+| `shelter@crisislink.dev` | shelter_manager | Your shelter's occupancy, admit people |
+| `operator@crisislink.dev` | operator | The dispatch console — map, ranked candidates, preemption |
+| `admin@crisislink.dev` | admin | The console plus outbox and audit endpoints |
+
+Same API, five different products — that separation is the RBAC layer, visible.
 
 ### Guided demo
 

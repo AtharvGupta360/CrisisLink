@@ -42,7 +42,7 @@ export default function ShelterMgr({ claims, onLogout }) {
       // 409 here is the capacity guard doing its job: occupancy < capacity is
       // checked and incremented in ONE atomic statement, so a full shelter simply
       // affects zero rows rather than over-admitting.
-      toast(e.status === 409 ? `Shelter is full — ${v.name} not admitted` : e.message, 'err');
+      toast(e.status === 409 ? `Shelter is full. ${v.name} was not admitted.` : e.message, 'err');
       load();
     } finally {
       setBusyId(null);
@@ -108,7 +108,7 @@ export default function ShelterMgr({ claims, onLogout }) {
       <div className="body">
         <div className="center-scroll">
           <div className="inner">
-            {!shelter && <div className="card"><div className="empty">Loading shelter…</div></div>}
+            {!shelter && <div className="card"><div className="empty">Loading shelter...</div></div>}
 
             {shelter && (
               <div className="card">
@@ -116,7 +116,7 @@ export default function ShelterMgr({ claims, onLogout }) {
                   <div>
                     <h2>{shelter.name}</h2>
                     <p className="sub">
-                      {full ? 'At capacity — admissions will be refused.' : `${free} beds available.`}
+                      {full ? 'At capacity. Admissions will be refused.' : `${free} beds available.`}
                     </p>
                   </div>
                   <button onClick={toggleStatus} className={shelter.status === 'open' ? '' : 'primary'}>
@@ -142,8 +142,8 @@ export default function ShelterMgr({ claims, onLogout }) {
             <div className="card">
               <h2>Awaiting placement</h2>
               <p className="sub">
-                People registered but not yet assigned to a shelter. You only ever
-                receive records your role is scoped to.
+                People registered but not yet placed in a shelter. You only see records
+                for your own shelter.
               </p>
               {victims.length === 0 && <div className="empty">Nobody is awaiting placement.</div>}
               {victims.map((v) => (
@@ -165,7 +165,7 @@ export default function ShelterMgr({ claims, onLogout }) {
                     onClick={() => admit(v)}
                   >
                     {busyId === v.id
-                      ? 'Admitting…'
+                      ? 'Admitting...'
                       : full
                         ? 'Full'
                         : shelter && shelter.status !== 'open'
